@@ -6,12 +6,19 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anndata==0.11.4",
+    "datashader>=0.18.0",
+    "holoviews>=1.20.2",
     "matplotlib==3.10.1",
     "networkx==3.4.2",
+    "notebook>=7.4.1",
     "numba==0.61.2",
     "numpy==2.2.5",
     "pandas==2.2.3",
+    "param>=2.2.0",
     "pyjulia==0.0.6",
+    "scikit-learn>=1.6.1",
     "seaborn==0.13.2",
+    "squidpy>=1.6.5",
     "torch==2.7.0",
+    "tqdm>=4.67.1",
 ]
