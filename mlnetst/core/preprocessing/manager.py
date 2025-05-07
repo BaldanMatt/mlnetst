@@ -1,6 +1,6 @@
 from pathlib import Path
 from abc import ABC, abstractmethod
-from typing import Any, List
+from typing import Any, List, Dict
 
 class PipelineStep(ABC):
     PROJECT_DIR = Path(__file__).resolve().parents[3]
@@ -13,6 +13,24 @@ class PipelineStep(ABC):
         self.dependencies = []
         self.status = "pending" # pending, running, completed, failed
         self.result = None
+        self._outputs: Dict[str, Any] = {}
+
+    @property
+    def outputs(self) -> Dict[str, Any]:
+        return self._outputs
+
+    def get_input_from(self,
+                       dependency_name: str,
+                       key: str = "default") -> Any:
+        dependency = next((dep for dep in self.dependencies if dep.name == dependency_name), None)
+        if not dependency:
+            raise ValueError(f"Dependency '{dependency_name}' not found in pipeline step '{self.name}'.")
+        if key not in dependency.outputs:
+            raise ValueError(f"Key '{key}' not found in outputs of dependency '{dependency_name}'.")
+        return dependency.outputs[key]
+
+    def set_output(self, key: str, value: Any) -> None:
+        self._outputs[key] = value
 
     def add_dependency(self, dependency):
         self.dependencies.append(dependency)
@@ -84,14 +102,15 @@ class Builder:
         self._pipeline.add_step(step)
         return step
 
-    def produce_preprocessor(self) -> PipelineStep:
-        pass
+    def produce_preprocessor(self, name:str, data_technology: str, filter_method: str, norm_method:str, output_path:Path=None) -> PipelineStep:
+        from mlnetst.core.preprocessing.processor import ProcessorFactory, Processor
+        step = ProcessorFactory.produce_processor(name, data_technology, filter_method, norm_method, output_path)
+        self._pipeline.add_step(step)
+        return step
     def produce_integrator(self) -> PipelineStep:
         pass
     def produce_embedder(self) -> PipelineStep:
         pass
-
-
 
 if __name__ == "__main__":
     builder = Builder()
@@ -101,13 +120,23 @@ if __name__ == "__main__":
         data_technology="snrna",
         file_path=file_path
     )
-    file_path = Path("/media/matteo/Content/SPATIALDATA/MOp/spatial/counts.zarr")
-    loader2 = builder.produce_loader(
-        name="loader2",
-        data_technology="merscope",
-        file_path=file_path
+    # file_path = Path("/media/matteo/Content/SPATIALDATA/MOp/spatial/counts.zarr")
+    # loader2 = builder.produce_loader(
+    #     name="loader2",
+    #     data_technology="merscope",
+    #     file_path=file_path
+    # )
+    output_path = Path("/home/matteo/PhD/PROJECTS/mlnetst/data/processed/counts100k_processed.h5ad")
+    processor = builder.produce_preprocessor(
+        name="processor1",
+        data_technology="snrna",
+        filter_method="filter1",
+        norm_method="norm1",
+        output_path=output_path
     )
-    loader2.add_dependency(loader)
+    processor.add_dependency(loader)
     pipeline = builder.pipeline
     pipeline.run()
+    print(loader.outputs["data"])
+    print(processor.outputs["processed_data"])
     print("Pipeline execution completed.")

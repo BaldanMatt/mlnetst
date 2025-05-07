@@ -22,7 +22,9 @@ class DataLoader(PipelineStep):
         return self._data
 
     def run(self) -> Any:
-        self.load()
+        loaded_data = self.load()
+        print("[DEBUG]", loaded_data)
+        self.set_output("data", loaded_data)
 
     @abstractmethod
     def load(self) -> None:
@@ -40,10 +42,10 @@ class SnDataLoader(DataLoader):
             file_path=file_path
         )
 
-    def load(self) -> None:
+    def load(self) -> anndata.AnnData:
         # Load snRNA data
-        self._data = anndata.read_h5ad(self.file_path)
-        print(self._data)
+        return anndata.read_h5ad(self.file_path)
+
 
 class MerscopeDataLoader(DataLoader):
     def __init__(self, name, file_path: Path):
