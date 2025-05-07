@@ -47,16 +47,15 @@ class SnDataLoader(DataLoader):
 
 class MerscopeDataLoader(DataLoader):
     def __init__(self, name, file_path: Path):
-        super().__init__(name="Merscope Data Loader", data_technology="Merscope")
-        self.data = None
-
-    def load_spatialdata(self):
-
-        counts = spatialdata.read_zarr(self.file_path)
+        super().__init__(
+            name="Merscope Data Loader",
+            data_technology="merscope",
+            file_path=file_path
+        )
 
     def load(self) -> None:
         # Load Merscope data
-        self.data = "Merscope data loaded"
+        self._data = spatialdata.read_zarr(self.file_path)
         print(self.data)
 
 class DataLoaderFactory:
@@ -64,7 +63,7 @@ class DataLoaderFactory:
     def produce_loader(name:str, data_technology: str, file_path: Path) -> DataLoader:
         if data_technology == "snrna":
             return SnDataLoader(name, file_path)
-        elif data_technology == "merfish":
+        elif data_technology == "merfish" or data_technology == "merscope":
             return MerscopeDataLoader(name, file_path)
         else:
             raise ValueError("Data Technology is not supported")

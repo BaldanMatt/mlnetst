@@ -46,11 +46,13 @@ class Pipeline:
         ordered_steps = self.resolve_execution_order()
         total_steps = len(ordered_steps)
 
-        print(f"Executing pipeline in order: {[str(step) for step in ordered_steps]}")
+        print(f"Executing {self}")
         for i, step in enumerate(ordered_steps,1):
             print(f"[{i}/{total_steps}] Running step: {step.name}")
+            step.status = "running"
             try:
                 step.run()
+                step.status = "completed"
                 print(f"{step.name} completed")
             except Exception as e:
                 step.status = "failed"
@@ -58,7 +60,12 @@ class Pipeline:
                 raise e
 
     def __str__(self):
-        return f"The Pipeline contains the following order of steps: \n\t{'\n\t'.join([str(step) for step in self.resolve_execution_order()])}"
+        steps = self.resolve_execution_order()
+        step_strings = []
+        for i, step in enumerate(steps, 1):
+            step_strings.append(f"Step {i}: {step}")
+        return "Pipeline Steps:\n\t" + "\n\t".join(step_strings)
+
 
 class Builder:
     def __init__(self):
@@ -69,8 +76,7 @@ class Builder:
 
     @property
     def pipeline(self) -> Pipeline:
-        pipeline = self._pipeline
-        return pipeline
+        return self._pipeline
 
     def produce_loader(self, name:str, data_technology:str, file_path: Path = None) -> PipelineStep:
         from mlnetst.core.preprocessing.loader import DataLoaderFactory, DataLoader
@@ -95,6 +101,13 @@ if __name__ == "__main__":
         data_technology="snrna",
         file_path=file_path
     )
+    file_path = Path("/media/matteo/Content/SPATIALDATA/MOp/spatial/counts.zarr")
+    loader2 = builder.produce_loader(
+        name="loader2",
+        data_technology="merscope",
+        file_path=file_path
+    )
+    loader2.add_dependency(loader)
     pipeline = builder.pipeline
     pipeline.run()
     print("Pipeline execution completed.")
