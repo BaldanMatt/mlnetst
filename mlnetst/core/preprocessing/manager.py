@@ -114,13 +114,15 @@ class Builder:
 
 if __name__ == "__main__":
     builder = Builder()
-    file_path = Path("/media/matteo/Content/SPATIALDATA/MOp/snrna/counts100k.h5ad")
+    root_media_dir = Path("/media/bio/Elements/Content")
+    # root_media_dir = Path("/media/matteo/Content")
+    file_path = root_media_dir / Path("SPATIALDATA/MOp/snrna/counts100k.h5ad")
     loader = builder.produce_loader(
         name="loader1",
         data_technology="snrna",
         file_path=file_path
     )
-    # file_path = Path("/media/matteo/Content/SPATIALDATA/MOp/spatial/counts.zarr")
+    # file_path = root_media_dir / Path("SPATIALDATA/MOp/spatial/counts.zarr")
     # loader2 = builder.produce_loader(
     #     name="loader2",
     #     data_technology="merscope",
