@@ -1,13 +1,19 @@
 import os
+import time
 
 from mlnetst.core.preprocessing.manager import PipelineStep
 from typing import Any, Optional
 from abc import ABC, abstractmethod
 from pathlib import Path
 import subprocess
+from tqdm import tqdm
 
 import pandas as pd
 import numpy as np
+import anndata
+import scanpy as sc
+
+RANDOM_STATE = 42
 
 class Processor(PipelineStep):
     def __init__(self,
@@ -115,72 +121,117 @@ class SnDataProcessor(Processor):
         ## Annotate cells
 
         # # Filter
-        # Set default values
-        low_th: int = 100
-        high_th: int = 6000
-        mito_th: float = 3
-        min_cells_per_gene: int = 10
-        min_genes_per_cell: int = 10
-        do_remove_coding: bool = True
-        if self.filter_kws:
-            low_th = self.filter_kws.get("low_th", low_th)
-            high_th = self.filter_kws.get("high_th", high_th)
-            mito_th = self.filter_kws.get("mito_th", mito_th)
-            min_cells_per_gene = self.filter_kws.get("min_cells_per_gene", min_cells_per_gene)
-            min_genes_per_cell = self.filter_kws.get("min_genes_per_cell", min_genes_per_cell)
-            do_remove_coding = self.filter_kws.get("do_remove_coding", do_remove_coding)
+        tic = time.time()
+        if self.filter_method == "default" or self.filter_method == "scrublet":
+            # Set default values
+            low_th: int = 100
+            high_th: int = 6000
+            mito_th: float = 3
+            min_cells_per_gene: int = 10
+            min_genes_per_cell: int = 10
+            scrublet_th: float = .25
+            do_remove_coding: bool = True
 
-        ## Filter genes
-        if do_remove_coding:
+            if self.filter_kws:
+                low_th = self.filter_kws.get("low_th", low_th)
+                high_th = self.filter_kws.get("high_th", high_th)
+                mito_th = self.filter_kws.get("mito_th", mito_th)
+                min_cells_per_gene = self.filter_kws.get("min_cells_per_gene", min_cells_per_gene)
+                min_genes_per_cell = self.filter_kws.get("min_genes_per_cell", min_genes_per_cell)
+                scrublet_th = self.filter_kws.get("scrublet_th", scrublet_th)
+                do_remove_coding = self.filter_kws.get("do_remove_coding", do_remove_coding)
+
+            ## Filter genes
+            if do_remove_coding:
+                before_shape = input_data.shape
+                input_data = input_data[:, (input_data.var["GENEBIOTYPE"] == "protein_coding")]
+                after_shape = input_data.shape
+                print(f"[PROCESSOR] Removed {before_shape[1] - after_shape[1]} genes due to non-coding, now is ({after_shape})")
+
             before_shape = input_data.shape
-            input_data = input_data[:, (input_data.var["GENEBIOTYPE"] == "protein_coding")]
+            if isinstance(input_data.X, anndata._core.views.SparseCSCMatrixView):
+                # For sparse arrays
+                non_zero_counts = input_data.X.getnnz(axis=0)
+            else:
+                # For dense arrays
+                non_zero_counts = (input_data.X != 0).sum(axis=0)
+            keep_columns = non_zero_counts > min_genes_per_cell
+            input_data = input_data[:, keep_columns]
             after_shape = input_data.shape
-            print(f"[PROCESSOR] Removed {before_shape[1] - after_shape[1]} genes due to non-coding, now is ({after_shape})")
+            print(f"[PROCESSOR] Removed {before_shape[1] - after_shape[1]} genes due to low unique expression, now is ({after_shape})")
 
-        before_shape = input_data.shape
-        if hasattr(input_data.X, 'sum_data'):
-            # For sparse arrays
-            input_data = input_data[:, input_data.X.sum(axis=0).A1 > min_cells_per_gene]
-        else:
-            # For dense arrays
-            input_data = input_data[:, np.array((input_data.X != 0)).sum(axis=0) > min_cells_per_gene]
-        after_shape = input_data.shape
-        print(f"[PROCESSOR] Removed {before_shape[1] - after_shape[1]} genes due to low unique expression, now is ({after_shape})")
+            ## Filter cells
+            before_shape = input_data.shape
+            input_data = input_data[input_data.obs["percent_mito"] < mito_th, :]
+            after_shape = input_data.shape
+            print(f"[PROCESSOR] Removed {before_shape[0] - after_shape[0]} cells due to high mitochondrial expression, now is ({after_shape})")
 
-        ## Filter cells
-        before_shape = input_data.shape
-        input_data = input_data[input_data.obs["percent_mito"] < mito_th, :]
-        after_shape = input_data.shape
-        print(f"[PROCESSOR] Removed {before_shape[0] - after_shape[0]} cells due to high mitochondrial expression, now is ({after_shape})")
+            before_shape = input_data.shape
+            input_data = input_data[input_data.obs["nGene"] > low_th, :]
+            input_data = input_data[input_data.obs["nGene"] < high_th, :]
+            after_shape = input_data.shape
+            print(f"[PROCESSOR] Removed {before_shape[0] - after_shape[0]} cells with too few or too many features, now is ({after_shape})")
 
-        before_shape = input_data.shape
-        input_data = input_data[input_data.obs["nGene"] > low_th, :]
-        input_data = input_data[input_data.obs["nGene"] < high_th, :]
-        after_shape = input_data.shape
-        print(f"[PROCESSOR] Removed {before_shape[0] - after_shape[0]} cells with too few or too many features, now is ({after_shape})")
-
-
-
-        print("[PROCESSOR] Removing")
-
-        ## Filter cells
+            ## Doublet detection
+            if self.filter_method == "scrublet":
+                before_shape = input_data.shape
+                sc.pp.scrublet(input_data, random_state=RANDOM_STATE)
+                #input_data = input_data[input_data.obs["scrublet_score"] < scrublet_th, :]
+                input_data = input_data[input_data.obs["predicted_doublet"], :]
+                print(f"[PROCESSOR] Removed {before_shape[0] - input_data.shape[0]} cells due to doublet detection, now is ({input_data.shape})")
+        toc = time.time()
+        print(f"[PROCESSOR] Filtered data in {toc - tic:.2f} seconds")
 
         # Transform
+        # set defaults
+        target_sum: int = 1e4
+        if self.norm_kws:
+            target_sum = self.norm_kws.get("target_sum", target_sum)
+        tic = time.time()
         ## Normalization
-        ## Log transformation
-        ## Scaling
+        if self.norm_method == "scanpy":
+            sc.pp.normalize_total(input_data, target_sum=target_sum)
 
-        # Embedding
-        ## PCA
+
+        elif self.norm_method == "deseq2":
+            from scipy.sparse import csr_matrix
+            geometric_means = np.power(np.mean(np.log1p(input_data.X), axis=0), np.e)
+            ratios = input_data.X / geometric_means
+            ratios = csr_matrix
+            row_medians = []
+            for i in tqdm(range(ratios.shape[0])):
+                nonzero_vals = ratios[i].data
+                median_val = np.median(nonzero_vals) if nonzero_vals.size > 0 else 1
+                row_medians.append(median_val)
+            medians = np.array(row_medians)
+            input_data.X = input_data / medians[:, None]
+
+        elif self.norm_method == "scran":
+            input_data.write_h5ad(self.tmp_dir / "snrna_data_to_scran.h5ad")
+            subprocess.run(["Rscript", str(self.proj_dir / "mlnetst/utils/scran_normalization.R"),
+                            "--input_file_path="+str(self.tmp_dir / "snrna_data_to_scran.h5ad"),
+                            "--output_file_path="+str(self.tmp_dir / "snrna_data_scran.h5ad")],
+                           cwd=self.proj_dir
+                           )
+            input_data = anndata.read_h5ad(self.tmp_dir / "snrna_data_scran.h5ad")
+
+        ## Log transformation
+        sc.pp.log1p(input_data)
+        input_data.X = input_data.X.tocsr()
+
+        toc = time.time()
+        print(f"[PROCESSOR] Normalized and transformed data in {toc - tic:.2f} seconds")
+
+        ## Scaling
 
         processed = input_data
         return processed
 
     def load_processed_data(self) -> Any:
-        pass
+        return anndata.read_h5ad(self.output_path)
 
     def save_processed_data(self) -> None:
-        pass
+        self._processed_data.write_h5ad(self.output_path)
 
 class MerscopeDataProcessor(Processor):
     def __init__(self,

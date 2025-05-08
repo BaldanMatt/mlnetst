@@ -23,7 +23,6 @@ class DataLoader(PipelineStep):
 
     def run(self) -> Any:
         loaded_data = self.load()
-        print("[DEBUG]", loaded_data)
         self.set_output("data", loaded_data)
 
     @abstractmethod

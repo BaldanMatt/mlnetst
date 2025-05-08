@@ -115,6 +115,7 @@ class Builder:
 if __name__ == "__main__":
     builder = Builder()
     root_media_dir = Path("/media/bio/Elements/Content")
+    root_project_dir = Path(__file__).parents[3]
     # root_media_dir = Path("/media/matteo/Content")
     file_path = root_media_dir / Path("SPATIALDATA/MOp/snrna/counts100k.h5ad")
     loader = builder.produce_loader(
@@ -128,17 +129,16 @@ if __name__ == "__main__":
     #     data_technology="merscope",
     #     file_path=file_path
     # )
-    output_path = Path("/home/matteo/PhD/PROJECTS/mlnetst/data/processed/counts100k_processed.h5ad")
+    output_path = root_project_dir / Path("data/processed/counts100k_processed.h5ad")
     processor = builder.produce_preprocessor(
         name="processor1",
         data_technology="snrna",
-        filter_method="filter1",
-        norm_method="norm1",
+        filter_method="default",
+        norm_method="scanpy",
         output_path=output_path
     )
     processor.add_dependency(loader)
     pipeline = builder.pipeline
     pipeline.run()
-    print(loader.outputs["data"])
     print(processor.outputs["processed_data"])
     print("Pipeline execution completed.")
