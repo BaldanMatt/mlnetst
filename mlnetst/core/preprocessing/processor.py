@@ -53,6 +53,7 @@ class Processor(PipelineStep):
             if self.output_path:
                 self.save_processed_data()
 
+        # print("[DEBUG in processor] what is processed data: ", self._processed_data)
         self.set_output("processed_data", self._processed_data)
 
     @abstractmethod
@@ -77,9 +78,9 @@ class SnDataProcessor(Processor):
     tmp_dir = data_dir / "tmp"
     def __init__(self,
                  name: str,
-                 filter_method: str,
-                 norm_method: str,
                  output_path: Optional[Path] = None,
+                 filter_method: str = "default",
+                 norm_method: str = "scanpy",
                  filter_kws: Optional[dict] = None,
                  norm_kws: Optional[dict] = None,) -> None:
         super().__init__(
@@ -236,9 +237,9 @@ class SnDataProcessor(Processor):
 class MerscopeDataProcessor(Processor):
     def __init__(self,
                  name: str,
-                 filter_method: str,
-                 norm_method: str,
                  output_path: Optional[Path] = None,
+                 filter_method: str = "default",
+                 norm_method: str = "scanpy",
                  filter_kws: Optional[dict] = None,
                  norm_kws: Optional[dict] = None) -> None:
         super().__init__(
@@ -251,6 +252,22 @@ class MerscopeDataProcessor(Processor):
             norm_kws=norm_kws
         )
     def process(self, input_data: Any) -> Any:
+        input_data.tables["table"].obs["sample_id"] = input_data.tables["table"].obs["sample_id"].astype("category")
+        input_data.tables["table"].obs["slice_id"] = input_data.tables["table"].obs["slice_id"].astype("category")
+
+        samples_categories = input_data.tables["table"].obs["sample_id"].cat.categories
+        print("[DEBUG] samples categories: ", samples_categories)
+        slices_categories = input_data.tables["table"].obs["slice_id"].cat.categories
+
+        from spatialdata.transformations import get_transformation, set_transformation, Identity
+        for sample_id in samples_categories:
+            # print("[DEBUG] sampleid: ", sample_id)
+            # Get unique slice_ids for current sample_id using groupby + unique
+            slices_id_in_sample_id = input_data.tables["table"].obs.groupby('sample_id')['slice_id'].unique()[sample_id]
+            # print("[DEBUG] slices in sampleid: ", slices_id_in_sample_id)
+            for slice_id in slices_id_in_sample_id:
+                set_transformation(input_data.shapes[slice_id], Identity(), to_coordinate_system=sample_id)
+                set_transformation(input_data.shapes[slice_id], Identity(), to_coordinate_system=slice_id)
         processed = input_data
         return processed
     def load_processed_data(self) -> Any:
@@ -262,14 +279,12 @@ class ProcessorFactory:
     @staticmethod
     def produce_processor(name: str,
                           data_technology: str,
-                          filter_method: str,
-                          norm_method: str,
                           output_path: Optional[Path] = None,
                           **kwargs) -> Processor:
         if data_technology == "snrna":
-            return SnDataProcessor(name, filter_method, norm_method, output_path, **kwargs)
+            return SnDataProcessor(name, output_path, **kwargs)
         elif data_technology == "merscope":
-            return MerscopeDataProcessor(name, filter_method, norm_method, output_path, **kwargs)
+            return MerscopeDataProcessor(name, output_path, **kwargs)
         else:
             raise ValueError(f"Unknown data technology: {data_technology}")
 

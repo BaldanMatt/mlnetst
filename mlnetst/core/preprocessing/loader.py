@@ -54,10 +54,10 @@ class MerscopeDataLoader(DataLoader):
             file_path=file_path
         )
 
-    def load(self) -> None:
+    def load(self) -> spatialdata.SpatialData:
         # Load Merscope data
-        self._data = spatialdata.read_zarr(self.file_path)
-        print(self.data)
+        return spatialdata.read_zarr(self.file_path)
+
 
 class DataLoaderFactory:
     @staticmethod

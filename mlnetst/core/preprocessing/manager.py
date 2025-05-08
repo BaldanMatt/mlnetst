@@ -102,13 +102,16 @@ class Builder:
         self._pipeline.add_step(step)
         return step
 
-    def produce_preprocessor(self, name:str, data_technology: str, filter_method: str, norm_method:str, output_path:Path=None) -> PipelineStep:
+    def produce_preprocessor(self, name:str, data_technology: str, output_path:Path=None, **kwargs) -> PipelineStep:
         from mlnetst.core.preprocessing.processor import ProcessorFactory, Processor
-        step = ProcessorFactory.produce_processor(name, data_technology, filter_method, norm_method, output_path)
+        step = ProcessorFactory.produce_processor(name, data_technology, output_path, **kwargs)
         self._pipeline.add_step(step)
         return step
-    def produce_integrator(self) -> PipelineStep:
-        pass
+    def produce_integrator(self, name:str, integration_method: str, output_path: Path=None, **kwargs) -> PipelineStep:
+        from mlnetst.core.preprocessing.integrator import IntegratorFactory, Integrator
+        step = IntegratorFactory.produce_integrator(name, integration_method, output_path, **kwargs)
+        self._pipeline.add_step(step)
+        return step
     def produce_embedder(self) -> PipelineStep:
         pass
 
@@ -123,12 +126,12 @@ if __name__ == "__main__":
         data_technology="snrna",
         file_path=file_path
     )
-    # file_path = root_media_dir / Path("SPATIALDATA/MOp/spatial/counts.zarr")
-    # loader2 = builder.produce_loader(
-    #     name="loader2",
-    #     data_technology="merscope",
-    #     file_path=file_path
-    # )
+    file_path = root_media_dir / Path("SPATIALDATA/MOp/spatial/counts.zarr")
+    loader2 = builder.produce_loader(
+        name="loader2",
+        data_technology="merscope",
+        file_path=file_path
+    )
     output_path = root_project_dir / Path("data/processed/counts100k_processed.h5ad")
     processor = builder.produce_preprocessor(
         name="processor1",
@@ -137,8 +140,26 @@ if __name__ == "__main__":
         norm_method="scanpy",
         output_path=output_path
     )
-    processor.add_dependency(loader)
+    output_path = root_project_dir / Path("data/processed/counts.zarr")
+    processor2 = builder.produce_preprocessor(
+        name="processor2",
+        data_technology="merscope",
+        output_path=output_path
+    )
+    processor2.add_dependency(loader2)
+    output_path = root_project_dir / Path("data/processed/integrated_data.zarr")
+    integrator = builder.produce_integrator(
+        name="integrator",
+        integration_method="tangram",
+        output_path=output_path,
+        integration_kws={
+            'point_of_view': 'samples',
+            'which_one': "mouse1_sample1",
+        }
+    )
+    integrator.add_dependency(processor)
+    integrator.add_dependency(processor2)
     pipeline = builder.pipeline
     pipeline.run()
-    print(processor.outputs["processed_data"])
+    print(integrator.outputs["integrated_data"])
     print("Pipeline execution completed.")
