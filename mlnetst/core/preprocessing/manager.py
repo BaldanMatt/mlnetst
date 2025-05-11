@@ -97,69 +97,82 @@ class Builder:
         return self._pipeline
 
     def produce_loader(self, name:str, data_technology:str, file_path: Path = None) -> PipelineStep:
-        from mlnetst.core.preprocessing.loader import DataLoaderFactory, DataLoader
+        from mlnetst.core.preprocessing.loader import DataLoaderFactory
         step = DataLoaderFactory.produce_loader(name, data_technology, file_path)
         self._pipeline.add_step(step)
         return step
 
     def produce_preprocessor(self, name:str, data_technology: str, output_path:Path=None, **kwargs) -> PipelineStep:
-        from mlnetst.core.preprocessing.processor import ProcessorFactory, Processor
+        from mlnetst.core.preprocessing.processor import ProcessorFactory
         step = ProcessorFactory.produce_processor(name, data_technology, output_path, **kwargs)
         self._pipeline.add_step(step)
         return step
     def produce_integrator(self, name:str, integration_method: str, output_path: Path=None, **kwargs) -> PipelineStep:
-        from mlnetst.core.preprocessing.integrator import IntegratorFactory, Integrator
+        from mlnetst.core.preprocessing.integrator import IntegratorFactory
         step = IntegratorFactory.produce_integrator(name, integration_method, output_path, **kwargs)
         self._pipeline.add_step(step)
         return step
-    def produce_embedder(self) -> PipelineStep:
-        pass
+    def produce_embedder(self, name: str, embed_method: str, output_path: Path = None, **kwargs) -> PipelineStep:
+        from mlnetst.core.preprocessing.embedder import EmbedderFactory
+        step = EmbedderFactory.produce_embedder(name, embed_method, output_path, **kwargs)
+        self._pipeline.add_step(step)
+        return step
 
 if __name__ == "__main__":
     builder = Builder()
     root_media_dir = Path("/media/bio/Elements/Content")
     root_project_dir = Path(__file__).parents[3]
     # root_media_dir = Path("/media/matteo/Content")
-    file_path = root_media_dir / Path("SPATIALDATA/MOp/snrna/counts100k.h5ad")
-    loader = builder.produce_loader(
-        name="loader1",
-        data_technology="snrna",
-        file_path=file_path
-    )
-    file_path = root_media_dir / Path("SPATIALDATA/MOp/spatial/counts.zarr")
-    loader2 = builder.produce_loader(
-        name="loader2",
-        data_technology="merscope",
-        file_path=file_path
-    )
-    output_path = root_project_dir / Path("data/processed/counts100k_processed.h5ad")
-    processor = builder.produce_preprocessor(
-        name="processor1",
-        data_technology="snrna",
-        filter_method="default",
-        norm_method="scanpy",
-        output_path=output_path
-    )
-    output_path = root_project_dir / Path("data/processed/counts.zarr")
-    processor2 = builder.produce_preprocessor(
-        name="processor2",
-        data_technology="merscope",
-        output_path=output_path
-    )
-    processor2.add_dependency(loader2)
-    output_path = root_project_dir / Path("data/processed/integrated_data.zarr")
+    # file_path = root_media_dir / Path("SPATIALDATA/MOp/snrna/counts100k.h5ad")
+    # loader = builder.produce_loader(
+    #     name="loader1",
+    #     data_technology="snrna",
+    #     file_path=file_path
+    # )
+    # file_path = root_media_dir / Path("SPATIALDATA/MOp/spatial/counts.zarr")
+    # loader2 = builder.produce_loader(
+    #     name="loader2",
+    #     data_technology="merscope",
+    #     file_path=file_path
+    # )
+    # output_path = root_project_dir / Path("data/processed/counts100k_processed.h5ad")
+    # processor = builder.produce_preprocessor(
+    #     name="processor1",
+    #     data_technology="snrna",
+    #     filter_method="default",
+    #     norm_method="scanpy",
+    #     output_path=output_path
+    # )
+    # output_path = root_project_dir / Path("data/processed/counts.zarr")
+    # processor2 = builder.produce_preprocessor(
+    #     name="processor2",
+    #     data_technology="merscope",
+    #     output_path=output_path
+    # )
+    # processor2.add_dependency(loader2)
+    output_path = root_project_dir / Path("data/processed/mouse1_slice153_x_hat_s.h5ad")
     integrator = builder.produce_integrator(
         name="integrator",
         integration_method="tangram",
         output_path=output_path,
+        force=False,
         integration_kws={
-            'point_of_view': 'samples',
-            'which_one': "mouse1_sample1",
+            'point_of_view': 'slices',
+            'which_one': "mouse1_slice153",
+            'subset_scale_factor': 1.5,
+            'num_epochs': 100,
         }
     )
-    integrator.add_dependency(processor)
-    integrator.add_dependency(processor2)
+    # integrator.add_dependency(processor)
+    # integrator.add_dependency(processor2)
+    embedder = builder.produce_embedder(
+        name="embedder",
+        embed_method="decoupler",
+        output_path=None,
+        force=True,
+    )
+    embedder.add_dependency(integrator)
     pipeline = builder.pipeline
     pipeline.run()
-    print(integrator.outputs["integrated_data"])
+    print(embedder.outputs["embedded_data"])
     print("Pipeline execution completed.")
