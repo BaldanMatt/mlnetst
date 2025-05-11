@@ -168,6 +168,10 @@ if __name__ == "__main__":
     embedder = builder.produce_embedder(
         name="embedder",
         embed_method="decoupler",
+        embedding_kws = {
+            'net':'gp_lr',
+            'score':'mlm',
+        },
         output_path=None,
         force=True,
     )
