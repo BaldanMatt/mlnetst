@@ -9,6 +9,7 @@ dependencies = [
     "datashader>=0.18.0",
     "decoupler>=1.9.2",
     "holoviews>=1.20.2",
+    "igraph>=0.11.8",
     "liana>=1.5.1",
     "matplotlib==3.10.1",
     "networkx==3.4.2",
