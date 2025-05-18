@@ -344,6 +344,17 @@ wheels = [
 ]
 
 [[package]]
+name = "bliss-bind"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/af/76da920051bea6587fa84f9feed4ef7eb0345641124ff7a6a0189af7c7d4/bliss_bind-0.3.0-cp312-abi3-macosx_10_15_universal2.whl", hash = "sha256:6201079f555973eeb2ef97e6991fb49704444081fd1b6cbfbc5ab046fbb65231", size = 205380, upload-time = "2024-07-17T15:14:18.704Z" },
+    { url = "https://files.pythonhosted.org/packages/37/8e/161354d3a4c785c01faaa1261882764ca5861c7d2cde62a30d297cf12e15/bliss_bind-0.3.0-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b90d63d0946202054145291fe93c8a00cc537d4a36014ca6279e02244320e63e", size = 138928, upload-time = "2024-07-17T15:14:35.357Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/4d/3695f0c3dc9cd6948f0bea1fa6881677940389c02658451d0351d348bf2a/bliss_bind-0.3.0-cp312-abi3-musllinux_1_1_x86_64.whl", hash = "sha256:99dc3f527f830a64b56cb6ad557c39509ea50a690fe852e76e4cb2a701f3663e", size = 193070, upload-time = "2024-07-17T15:14:37.161Z" },
+    { url = "https://files.pythonhosted.org/packages/be/4a/4f6b32a01d4d65c7fae4906e3b6e7f1d700c08731a2a5c07ef965820df15/bliss_bind-0.3.0-cp312-abi3-win_amd64.whl", hash = "sha256:81a0f364427e28588ce5b17f97415d4680fb1171fd57c94fb6387c8291d1d574", size = 283146, upload-time = "2024-07-17T15:14:50.533Z" },
+]
+
+[[package]]
 name = "bokeh"
 version = "3.7.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1047,6 +1058,9 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+http = [
+    { name = "aiohttp" },
+]
 s3 = [
     { name = "s3fs" },
 ]
@@ -1829,6 +1843,40 @@ wheels = [
 ]
 
 [[package]]
+name = "lightning"
+version = "2.5.1.post0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec", extra = ["http"] },
+    { name = "lightning-utilities" },
+    { name = "packaging" },
+    { name = "pytorch-lightning" },
+    { name = "pyyaml" },
+    { name = "torch" },
+    { name = "torchmetrics" },
+    { name = "tqdm" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/97/d0/fb3c5077efdd74c28ea3a277fd80bbf03738d866013a8637691138bfebca/lightning-2.5.1.post0.tar.gz", hash = "sha256:fda1ac63c283b3b08a54be8d905dd88469cf09e9845d36dd28b699e78911cbc8", size = 631113, upload-time = "2025-04-25T20:24:25.054Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/1b/67201d693a575e8a086831710f33e697fab66166223f792e459ef2b84934/lightning-2.5.1.post0-py3-none-any.whl", hash = "sha256:a228a52ca52f0c5006ff327c92b8942f09e1aea3f2d9b0d7c8a209edd5b9e71d", size = 819001, upload-time = "2025-04-25T20:24:21.212Z" },
+]
+
+[[package]]
+name = "lightning-utilities"
+version = "0.14.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "setuptools" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0f/bb/63a6a8c9e7a96b6ba92647fa5b1595c2dbee29f8178705adb4704d82ecba/lightning_utilities-0.14.3.tar.gz", hash = "sha256:37e2f83f273890052955a44054382c211a303012ee577619efbaa5df9e65e9f5", size = 30346, upload-time = "2025-04-03T15:59:56.928Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/c1/31b3184cba7b257a4a3b5ca5b88b9204ccb7aa02fe3c992280899293ed54/lightning_utilities-0.14.3-py3-none-any.whl", hash = "sha256:4ab9066aa36cd7b93a05713808901909e96cc3f187ea6fd3052b2fd91313b468", size = 28894, upload-time = "2025-04-03T15:59:55.658Z" },
+]
+
+[[package]]
 name = "linkify-it-py"
 version = "2.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -2139,6 +2187,7 @@ dependencies = [
     { name = "holoviews" },
     { name = "igraph" },
     { name = "liana" },
+    { name = "lightning" },
     { name = "matplotlib" },
     { name = "networkx" },
     { name = "nichecompass" },
@@ -2150,6 +2199,7 @@ dependencies = [
     { name = "pip" },
     { name = "polars" },
     { name = "pyjulia" },
+    { name = "pymnet" },
     { name = "scanpy" },
     { name = "scikit-learn" },
     { name = "scrublet" },
@@ -2169,6 +2219,7 @@ requires-dist = [
     { name = "holoviews", specifier = ">=1.20.2" },
     { name = "igraph", specifier = ">=0.11.8" },
     { name = "liana", specifier = ">=1.5.1" },
+    { name = "lightning", specifier = ">=2.5.1.post0" },
     { name = "matplotlib", specifier = "==3.10.1" },
     { name = "networkx", specifier = "==3.4.2" },
     { name = "nichecompass", specifier = ">=0.1.3" },
@@ -2180,6 +2231,7 @@ requires-dist = [
     { name = "pip", specifier = ">=25.1.1" },
     { name = "polars", specifier = ">=1.29.0" },
     { name = "pyjulia", specifier = "==0.0.6" },
+    { name = "pymnet", specifier = ">=1.0.0" },
     { name = "scanpy", specifier = ">=1.10.4" },
     { name = "scikit-learn", specifier = ">=1.6.1" },
     { name = "scrublet", specifier = ">=0.2.3" },
@@ -3552,6 +3604,21 @@ wheels = [
 ]
 
 [[package]]
+name = "pymnet"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "bliss-bind", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or sys_platform == 'darwin'" },
+    { name = "matplotlib" },
+    { name = "networkx" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/73/74/a382d16240a07993f73400945c5ecb1beb3656f65ed6c104ef7a7d72b4b2/pymnet-1.0.0-py3-none-any.whl", hash = "sha256:36b4a2dae174a18d6fac7ece96ccb264f848100f3be6ddf512de3429c25ecdc8", size = 2182948, upload-time = "2024-07-24T13:23:56.93Z" },
+]
+
+[[package]]
 name = "pynndescent"
 version = "0.5.13"
 source = { registry = "https://pypi.org/simple" }
@@ -3761,6 +3828,25 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9e/de/d3144a0bceede957f961e975f3752760fbe390d57fbe194baf709d8f1f7b/python_json_logger-3.3.0.tar.gz", hash = "sha256:12b7e74b17775e7d565129296105bbe3910842d9d0eb083fc83a6a617aa8df84", size = 16642, upload-time = "2025-03-07T07:08:27.301Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/08/20/0f2523b9e50a8052bc6a8b732dfc8568abbdc42010aef03a2d750bdab3b2/python_json_logger-3.3.0-py3-none-any.whl", hash = "sha256:dd980fae8cffb24c13caf6e158d3d61c0d6d22342f932cb6e9deedab3d35eec7", size = 15163, upload-time = "2025-03-07T07:08:25.627Z" },
+]
+
+[[package]]
+name = "pytorch-lightning"
+version = "2.5.1.post0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec", extra = ["http"] },
+    { name = "lightning-utilities" },
+    { name = "packaging" },
+    { name = "pyyaml" },
+    { name = "torch" },
+    { name = "torchmetrics" },
+    { name = "tqdm" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fe/0c/cfa6223c525f67ea3a7a2907e36e9e9a9653300f82cfd9af88f8136514ab/pytorch_lightning-2.5.1.post0.tar.gz", hash = "sha256:abc3d5a804d41f941b14e3fd7db5572a1270cd1e9889b50e962984c87d498d94", size = 634368, upload-time = "2025-04-25T20:24:29.272Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/de/a9/e14821cfaf08e8d78185cca0477c9d3a62bafe1b4b530100f7b66bb1f7bb/pytorch_lightning-2.5.1.post0-py3-none-any.whl", hash = "sha256:873fb21392c8b79908218f5ca8f65bd835439216e52550c36ff55d849e99c93e", size = 823084, upload-time = "2025-04-25T20:24:27.421Z" },
 ]
 
 [[package]]
@@ -4868,6 +4954,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e8/81/e1b015494cb9e0bf4c47cc8426e49736120248733be0e22072a5628ae9ed/torch_geometric-2.6.1.tar.gz", hash = "sha256:1f18f9d0fc4d2239d526221e4f22606a4a3895b5d965a9856d27610a3df662c6", size = 771490, upload-time = "2024-09-26T08:11:30.25Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/03/9f/157e913626c1acfb3b19ce000b1a6e4e4fb177c0bc0ea0c67ca5bd714b5a/torch_geometric-2.6.1-py3-none-any.whl", hash = "sha256:8faeb353f9655f7dbec44c5e0b44c721773bdfb279994da96b9b8b12fd30f427", size = 1135632, upload-time = "2024-09-26T08:11:27.194Z" },
+]
+
+[[package]]
+name = "torchmetrics"
+version = "1.7.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lightning-utilities" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/28/c4/2d921ccf7433ee6d8d6edeaca238674cbbc74528120631c662014795c645/torchmetrics-1.7.1.tar.gz", hash = "sha256:0ac1a0e90d2375866ceb5d3868720c6df7d7d0c5729b7ad36e92c897c6af70c2", size = 565045, upload-time = "2025-04-07T19:39:52.577Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/ee/4d0a7213a6f412afb3483031009a3b970dd7bed3be24de95ab04fba1c05a/torchmetrics-1.7.1-py3-none-any.whl", hash = "sha256:9a4c45edbd0a1844cc1540c9e71bfbe0ee783a2ed997344d947fefecac90dbb9", size = 961489, upload-time = "2025-04-07T19:39:50.455Z" },
 ]
 
 [[package]]
