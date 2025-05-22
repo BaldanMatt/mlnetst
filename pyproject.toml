@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anndata==0.11.4",
+    "beautifulsoup4>=4.13.4",
     "datashader>=0.18.0",
     "decoupler>=1.9.2",
     "holoviews>=1.20.2",
@@ -26,6 +27,7 @@ dependencies = [
     "polars>=1.29.0",
     "pyjulia==0.0.6",
     "pymnet>=1.0.0",
+    "pypath-omnipath>=0.16.17",
     "scanpy>=1.10.4",
     "scikit-learn>=1.6.1",
     "scrublet>=0.2.3",
