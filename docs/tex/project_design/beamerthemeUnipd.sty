@@ -1,0 +1,30 @@
+\RequirePackage{ifthen}
+\RequirePackage{textpos}
+\RequirePackage{tikz}
+\usetikzlibrary{backgrounds}
+\RequirePackage{appendixnumberbeamer}
+
+%% Define option for the separation symbol of the footer page of pages (default: "of")
+\DeclareOptionBeamer{pageofpages}{%
+    \PassOptionsToPackage{pageofpages=#1}{beamerouterthemeunipd}}
+
+%% Option for positioning both the Unipd and the department logos in the first slide, passing the second logo path as option 
+\DeclareOptionBeamer{logo}[\empty]{%
+    \PassOptionsToPackage{logo=#1}{beamerinnerthemeunipd}}
+    
+%% Design new blocks
+\newtheorem{definition}{Definition}
+\newenvironment<>{definition}[1]{%
+    \setbeamercolor{block title}{fg=white,bg=green!50!black}%
+    \begin{block}#2{#1}}{\end{block}}
+\ProcessOptionsBeamer
+
+\mode<presentation>
+
+\useoutertheme{unipd}
+\useinnertheme{unipd}
+\usecolortheme{unipd}
+\usefonttheme{unipd}
+
+\mode
+<all>
