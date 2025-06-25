@@ -121,5 +121,13 @@ def load_resource(name: str, force: bool = False) -> pd.DataFrame:
                 index=False
             )
         return translated_omni_net 
+    elif name == "collectri":
+        print("thanks for choosing the collectri resource")
+        import decoupler as dc
+        net = dc.op.collectri(
+            organism="mouse",
+            remove_complexes=False,
+            )
+        return net
     else:
         raise NotImplementedError("Requested resource is not available yet")

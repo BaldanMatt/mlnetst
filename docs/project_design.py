@@ -12,13 +12,19 @@ def _():
     import os
     import nichecompass as nc
     import pandas as pd
-    return Path, nc, pd, sys
-
-
-@app.cell
-def _():
     import anndata as ad
-    return (ad,)
+    import numpy as np
+    import torch
+    import numpy as np
+    import networkx as nx
+    import matplotlib.pyplot as plt
+    import random
+
+    RANDOM_SEED = 42
+    np.random.seed(RANDOM_SEED)
+    pd.core.common.random_state(None)
+    random.seed(RANDOM_SEED)
+    return Path, ad, nc, np, nx, pd, plt, sys, torch
 
 
 @app.cell
@@ -40,12 +46,13 @@ def _(x_hat_s):
 def _(lr_interactions_df, subdata):
     # Sample 1 LR interactions from mouse consensus
     notFound = True
+    L = 5
     while notFound:
-        sample_lr = lr_interactions_df.sample(n=1)
+        sample_lr = lr_interactions_df.sample(n=L)
         if list(sample_lr["sources"][0])[0].lower() in subdata.var_names and list(sample_lr["targets"][0])[0].lower() in subdata.var_names:
             notFound = False
     print(sample_lr)
-    return (sample_lr,)
+    return L, sample_lr
 
 
 @app.cell
@@ -55,37 +62,61 @@ def _(sample_lr):
 
 
 @app.cell
-def _(sample_lr, subdata):
-    import torch
-    import numpy as np
-    import networkx as nx
-    import matplotlib.pyplot as plt
+def _(L, np, nx, plt, sample_lr, subdata, torch):
+    id_lr = 0
+    TOLL_DIST = 1e-5
+    TH_INTERCELLULAR = 0.975
+    N = subdata.shape[0]
+    # Add spatial coordinates
     subdata.obsm["spatial"] = np.array([(x,y) for x,y in zip(subdata.obs["centroid_x"], subdata.obs["centroid_y"])])
-    spatial_position_matrix = torch.tensor(
+    # Cast spatial coordinates to tensor Ncells x 2
+    spatial_position_tensor = torch.tensor(
         subdata.obsm["spatial"], dtype=torch.float32
     )
+    # Compute euclidean distance between points in space
     dist_matrix = torch.cdist(
-        spatial_position_matrix,
-        spatial_position_matrix,
+        spatial_position_tensor,
+        spatial_position_tensor,
         p=2
     )
+
+    # Init sparse coo tensor
+    mlnet = torch.sparse_coo_tensor(size=(N,N,L))
+    print(mlnet)
+
+    # Select intralayer mask L
     ligand_mask = torch.from_numpy(
-        subdata[:, list(sample_lr["sources"].explode())[0].lower()].X.astype(np.float32)
+        subdata[:, list(sample_lr["sources"].explode())[id_lr].lower()].X.astype(np.float32)
     )
+    # Select intralayer mask R
     receptor_mask = torch.from_numpy(
-        subdata[:, list(sample_lr["targets"].explode())[0].lower()].X.astype(np.float32)
+        subdata[:, list(sample_lr["targets"].explode())[id_lr].lower()].X.astype(np.float32)
     )
-    single_lr = torch.div(ligand_mask @ receptor_mask.T, dist_matrix + 1e-5)
+
+
+    # Compute intralayer score
+    single_lr = torch.div(ligand_mask @ receptor_mask.T, dist_matrix + TOLL_DIST)
     single_lr = single_lr.fill_diagonal_(0)
-    mask = single_lr > np.quantile(single_lr.numpy().flatten(), 0.99)
+
+    # Threshold naively to have a sparse network
+    mask = single_lr > np.quantile(single_lr.numpy().flatten(), TH_INTERCELLULAR)
     masked_single_lr = single_lr * mask
+    print(f"State of the single intralayer: {single_lr}")
+
+    # Cast to convert to network object and draw
     cells_inter_scores = masked_single_lr.to_sparse()
+
+    mlnet = torch.dstack((mlnet, cells_inter_scores))
+    print(mlnet)
+
     adj = cells_inter_scores.to_dense().numpy()
     g = nx.from_numpy_array(adj)
-    pos = [(x,y) for x,y in zip(spatial_position_matrix[:,0].numpy(), spatial_position_matrix[:,1].numpy())]
+    print(f"State of the intralayer: {g}")
+    pos = [(x,y) for x,y in zip(spatial_position_tensor[:,0].numpy(), spatial_position_tensor[:,1].numpy())]
     nx.draw(g, pos, node_size=10, node_color="blue", alpha=0.5)
+    plt.title(f"Ligand {sample_lr["sources"].explode()[id_lr].lower()} - Receptor {sample_lr["targets"].explode()[id_lr].lower()}")
     plt.show()
-    return g, plt
+    return (g,)
 
 
 @app.cell
@@ -292,7 +323,7 @@ def filter_and_combine_gp_dict_gps_v2(
                                     "sources_categories"]
                             new_gp_dict[new_gp_name][
                                 "targets_categories"] = target_genes_categories
-                            
+
                     elif len(source_genes_i) == 0:
                         target_genes_overlap = list(
                             set(target_genes_i) & set(target_genes_j))
