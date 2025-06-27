@@ -507,8 +507,8 @@ if __name__ == "__main__":
     subdata = x_hat_s[x_hat_s.obs["subclass"].isin([source,target]), :]
     print(subdata)
 
-    N = 100
-    L = 100
+    N = 10
+    L = 10
 
     RANDOM_STATE = 42
     np.random.seed(RANDOM_STATE)
@@ -535,7 +535,9 @@ if __name__ == "__main__":
     lr_interactions_df["source"].apply(is_valid_complex) &
         lr_interactions_df["target"].apply(is_valid_complex)
     ]
-
+    #print(f"Found {len(filtered_df)} valid interactions out of {len(lr_interactions_df)} total interactions.")
+    # Check if we have enough interactions to sample
+    #print(f"Unique sources: {filtered_df['source'].nunique()}, unique targets: {filtered_df['target'].nunique()}")
     # 4. Sample from filtered interactions
     if len(filtered_df) >= L:
         sample_lr = filtered_df.sample(n=L)
@@ -561,3 +563,7 @@ if __name__ == "__main__":
         print("✅ Dense and sparse networks are equal.")
     print("Multilayer network built successfully.")
     print(f"Network shape: {mlnet.shape}")
+
+
+    torch.save(mlnet, Path(__file__).parents[3] / "data" / "processed" / "mouse1_slice153_mlnet.pt")
+    torch.save(mlnet_sparse, Path(__file__).parents[3] / "data" / "processed" / "mouse1_slice153_mlnet_sparse.pt")
