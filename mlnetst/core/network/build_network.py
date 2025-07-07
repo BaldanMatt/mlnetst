@@ -48,6 +48,8 @@ def build_sparse_multilayer_network(N,L, cell_indexes, sample_lr, data,
     ligand_ids = [sample_lr["source"].iloc[l].lower() for l in range(L)]
     receptor_ids = [sample_lr["target"].iloc[l].lower() for l in range(L)]
 
+
+    #TODO: Change this function to be batch on cell_ids. Do not want to call it N times.
     def get_expression_value(cell_id, gene_id):
         """Memory efficient expression extraction"""
         if len(gene_id.split("_")) > 1:
@@ -58,6 +60,23 @@ def build_sparse_multilayer_network(N,L, cell_indexes, sample_lr, data,
             return result
         else:
             return float(data[cell_id, gene_id].X.flatten()[0])
+
+    def get_expression_value_batch(cell_indices, gene_id):
+        if len(gene_id.split("_")) > 1:
+            gene_list = gene_id.split("_")
+            expr_matrix = data[cell_indices,:][:, gene_list].X.astype(np.float32)
+            if hasattr(expr_matrix, 'toarray'):
+                expr_matrix = expr_matrix.toarray()
+            expr_tensor = torch.tensor(expr_matrix, dtype=torch.float32)
+            result = torch.exp(torch.mean(torch.log(expr_tensor + toll_geom_mean), dim=1))
+            return result
+        else:
+            expr_vector = data[cell_indices, gene_id].X
+            if hasattr(expr_vector, 'toarray'):
+                expr_vector = expr_vector.toarray()
+            else:
+                expr_vector = expr_vector.flatten()
+            return torch.tensor(expr_vector, dtype=torch.float32)
 
     # Lists to store sparse tensor components
     indices_list = [] # Will store [dim0, dim1, dim2, dim3] indices
@@ -86,10 +105,13 @@ def build_sparse_multilayer_network(N,L, cell_indexes, sample_lr, data,
             ligand_id = ligand_ids[alpha]
             receptor_id = receptor_ids[alpha]
             # Extract expression vectors for this layer
-            ligand_vals = torch.tensor([get_expression_value(cell_indexes[i], ligand_id)
-                                        for i in range(N)], dtype=torch.float32)
-            receptor_vals = torch.tensor([get_expression_value(cell_indexes[j], receptor_id)
-                                          for j in range(N)], dtype=torch.float32)
+            all_cell_indices = cell_indexes
+            #ligand_vals = torch.tensor([get_expression_value(cell_indexes[i], ligand_id)
+            #                            for i in range(N)], dtype=torch.float32)
+            #receptor_vals = torch.tensor([get_expression_value(cell_indexes[j], receptor_id)
+            #                              for j in range(N)], dtype=torch.float32)
+            ligand_vals = get_expression_value_batch(all_cell_indices, ligand_id)
+            receptor_vals = get_expression_value_batch(all_cell_indices, receptor_id)
             # Create interaction matrix using broadcasting
             interaction_matrix = torch.outer(ligand_vals, receptor_vals) / dist_matrix
             interaction_matrix.fill_diagonal_(0)  # Remove self-interactions
@@ -170,15 +192,26 @@ def build_sparse_multilayer_network(N,L, cell_indexes, sample_lr, data,
             ligand_beta_id = ligand_ids[beta]
 
             # Extract expressions for all cells
-            receptor_alpha_vals = torch.tensor([get_expression_value(cell_indexes[i], receptor_alpha_id)
-                                                for i in range(N)], dtype=torch.float32)
-            ligand_beta_vals = torch.tensor([get_expression_value(cell_indexes[i], ligand_beta_id)
-                                            for i in range(N)], dtype=torch.float32)
+            #TODO: Update once get_expression_value is batch compatible. 
+            all_cell_indices = cell_indexes
+            receptor_alpha_vals = get_expression_value_batch(all_cell_indices, receptor_alpha_id)
+            ligand_beta_vals = get_expression_value_batch(all_cell_indices, ligand_beta_id)
+            
+            
+
+            #receptor_alpha_vals = torch.tensor([get_expression_value(cell_indexes[i], receptor_alpha_id)
+            #                                    for i in range(N)], dtype=torch.float32)
+            #ligand_beta_vals = torch.tensor([get_expression_value(cell_indexes[i], ligand_beta_id)
+            #                                for i in range(N)], dtype=torch.float32)
+
             # Element-wise multiplication for diagonal elements
             diagonal_values = receptor_alpha_vals * ligand_beta_vals
             # Get non-zero indices and values
             mask = diagonal_values.abs() > sparsity_threshold
             nonzero_positions = torch.nonzero(mask, as_tuple=False).squeeze()
+            if nonzero_positions.numel() == 0:
+                return torch.empty((4,0), dtype=torch.long), torch.empty(0, dtype=torch.float32)
+
             nonzero_values = diagonal_values[mask]
 
             # Convert to 4D indices: [i, alpha, i, beta]
@@ -507,8 +540,8 @@ if __name__ == "__main__":
     subdata = x_hat_s[x_hat_s.obs["subclass"].isin([source,target]), :]
     print(subdata)
 
-    N = 10
-    L = 10
+    N = 1000
+    L = 20
 
     RANDOM_STATE = 42
     np.random.seed(RANDOM_STATE)
@@ -548,22 +581,22 @@ if __name__ == "__main__":
     
     print(f"Building the following layers: {sample_lr['source'].tolist()} -> {sample_lr['target'].tolist()}")
     compute_tensor_memory_usage(N,L) 
-    mlnet = build_multilayer_network(N, L, cell_indexes, sample_lr, subdata,
-                                     compute_intralayer=True, compute_interlayer=True,
-                                     n_jobs=-1, enable_logging=True)
+    #mlnet = build_multilayer_network(N, L, cell_indexes, sample_lr, subdata,
+    #                                 compute_intralayer=True, compute_interlayer=True,
+    #                                 n_jobs=1, enable_logging=True)
     mlnet_sparse = build_sparse_multilayer_network(N, L, cell_indexes, sample_lr, subdata,
                                      compute_intralayer=True, compute_interlayer=True,
-                                     n_jobs=-1, sparsity_threshold=0, enable_logging = True)
+                                     n_jobs=1, sparsity_threshold=0, enable_logging = True)
 
     # Check if the network are built coorectly
-    result = torch.equal(mlnet, mlnet_sparse.to_dense())
-    if not result:
-        print("❌ Error: Dense and sparse networks are not equal!")
-    else:
-        print("✅ Dense and sparse networks are equal.")
-    print("Multilayer network built successfully.")
-    print(f"Network shape: {mlnet.shape}")
+    #result = torch.equal(mlnet, mlnet_sparse.to_dense())
+    #if not result:
+    #    print("❌ Error: Dense and sparse networks are not equal!")
+    #else:
+    #    print("✅ Dense and sparse networks are equal.")
+    #print("Multilayer network built successfully.")
+    #print(f"Network shape: {mlnet.shape}")
 
 
-    torch.save(mlnet, Path(__file__).parents[3] / "data" / "processed" / "mouse1_slice153_mlnet.pt")
+    #torch.save(mlnet, Path(__file__).parents[3] / "data" / "processed" / "mouse1_slice153_mlnet.pt")
     torch.save(mlnet_sparse, Path(__file__).parents[3] / "data" / "processed" / "mouse1_slice153_mlnet_sparse.pt")
