@@ -8,6 +8,76 @@ import anndata as ad
 from mlnetst.core.knowledge.networks import load_resource
 from mlnetst.utils import compute_tensor_memory_usage
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
+import logging
+
+def get_expression_value_batch(data, cell_indices, gene_id, toll_geom_mean):
+    if len(gene_id.split("_"))>1: # gene_id is a complex
+        gene_list = gene_id.split("_")
+        expr = torch.tensor(data[cell_indices, :][:, gene_list].X.astype(np.float32),
+                            dtype=torch.float32)
+        return torch.exp(torch.mean(torch.log(expr + toll_geom_mean), dim=1)).squeeze()
+    else:
+        return torch.tensor(data[cell_indices, gene_id].X.astype(np.float32),
+                            dtype=float32).squeeze()
+        
+
+def assemble_multilayer_network(data, lr_db,
+                                batch_size: int | None = None,
+                                toll_dist: float = 1e-10, toll_complexes: float = 1e-10,
+                                build_intra: bool =True, build_inter: bool =True,
+                                logger: Any | None = None, n_jobs:int = 1,
+                                ) -> Any:
+
+    """
+    This function builds a sparse tensor of 4D that contains the interactions between
+    nodes in multiple layers.
+    Args:
+        - data: anndata.AnnData containing the spatial transcriptomics count table
+        - lr_db: pd.DataFrame database containing ligand-receptor pairs
+        - toll_dist: tolerance for distances between cells that too close
+        - toll_complexes: tolerance for the computation of the complex score
+        - build_intra: flag to build intralayer scores
+        - build_inter: flag to build interlayer scores
+        - logger: Logger Object, if provided verbose is activated
+        - n_jobs: number of workers/threads to parallelize computation
+    Returns:
+        - torch.sparse.FloatTensor: Sparse tensor in COO format (N, L, N, L)
+    """
+    start_building_time = time.time()
+    # Determine number of threads for parallelization
+    if n_jobs == -1:
+        n_jobs = os.cpu_count()
+    elif n_jobs <= 0:
+        n_jobs = 1
+
+    # Determine logger and verbose mode
+    if logger is not None and isinstance(logger, logging.Logger):
+        ...
+    else:
+        print("Verbose mode deactivated")
+
+    # Prepare runtime variables
+    num_observations = data.shape[0]
+    num_layers = lr_db.shape[0]
+    ligand_ids = lr_db["source"].tolist().lower()
+    receptor_ids = lr_db["target"].tolist().lower()
+
+    if batch_size is None:
+        batch_size=num_observations
+
+    # We are extracting scores for chunks of observations
+    if batch_size < num_observations:
+        ...
+
+    else:
+        cell_indexes = data.obs_names
+        for layer in ligand_ids:
+            tmp = get_expression_value_batch(
+
+
+
+
 
 
 def build_sparse_multilayer_network(N,L, cell_indexes, sample_lr, data,
@@ -69,14 +139,14 @@ def build_sparse_multilayer_network(N,L, cell_indexes, sample_lr, data,
                 expr_matrix = expr_matrix.toarray()
             expr_tensor = torch.tensor(expr_matrix, dtype=torch.float32)
             result = torch.exp(torch.mean(torch.log(expr_tensor + toll_geom_mean), dim=1))
-            return result
+            return result.squeeze()
         else:
             expr_vector = data[cell_indices, gene_id].X
             if hasattr(expr_vector, 'toarray'):
                 expr_vector = expr_vector.toarray()
             else:
                 expr_vector = expr_vector.flatten()
-            return torch.tensor(expr_vector, dtype=torch.float32)
+            return torch.tensor(expr_vector, dtype=torch.float32).squeeze()
 
     # Lists to store sparse tensor components
     indices_list = [] # Will store [dim0, dim1, dim2, dim3] indices
@@ -113,6 +183,7 @@ def build_sparse_multilayer_network(N,L, cell_indexes, sample_lr, data,
             ligand_vals = get_expression_value_batch(all_cell_indices, ligand_id)
             receptor_vals = get_expression_value_batch(all_cell_indices, receptor_id)
             # Create interaction matrix using broadcasting
+            #print(f"[DEBUG] {ligand_vals.shape} and  {receptor_vals.shape}")
             interaction_matrix = torch.outer(ligand_vals, receptor_vals) / dist_matrix
             interaction_matrix.fill_diagonal_(0)  # Remove self-interactions
             # Get non-zero indices and values
@@ -517,7 +588,7 @@ def build_multilayer_network(N, L, cell_indexes, sample_lr, data,
     # Clean up distance matrix if it was created
     if dist_matrix is not None:
         del dist_matrix
-    
+
     toc = time.time()
     total_time = toc - tic
     log_info(f"Multilayer network construction completed in {total_time:.2f} s")
@@ -532,6 +603,11 @@ def build_multilayer_network(N, L, cell_indexes, sample_lr, data,
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--num_layers", "-L", type=int)
+    parser.add_argument("--num_cells", "--N", type=int)
+    args = parser.parse_args()
     print("DEBUGGING build_network.py")
     x_hat_s = ad.read_h5ad(Path(__file__).parents[3] / "data" / "processed" / "mouse1_slice153_x_hat_s.h5ad")
 
@@ -540,8 +616,8 @@ if __name__ == "__main__":
     subdata = x_hat_s[x_hat_s.obs["subclass"].isin([source,target]), :]
     print(subdata)
 
-    N = 1000
-    L = 20
+    N = args.num_cells
+    L = args.num_layers
 
     RANDOM_STATE = 42
     np.random.seed(RANDOM_STATE)
@@ -579,7 +655,9 @@ if __name__ == "__main__":
         print(f"❌ Not enough valid interactions (found {len(filtered_df)}, needed {L})")
         sample_lr = None  # Or handle appropriately
     
-    print(f"Building the following layers: {sample_lr['source'].tolist()} -> {sample_lr['target'].tolist()}")
+    print(f"Building the following layers: ")
+    print([x+"->"+y
+        for x,y in zip(sample_lr["source"].tolist(), sample_lr["target"].tolist())])
     compute_tensor_memory_usage(N,L) 
     #mlnet = build_multilayer_network(N, L, cell_indexes, sample_lr, subdata,
     #                                 compute_intralayer=True, compute_interlayer=True,

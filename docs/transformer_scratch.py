@@ -32,7 +32,6 @@ def _(mo):
     - Keys
     - Queries
     All go through a linear layer and then are aggregated through a scaled dot product attention, concatenated and passed once again through a linear layer.
-
     """
     )
     return
