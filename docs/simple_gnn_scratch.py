@@ -58,39 +58,39 @@ def _(
     def image_to_graph(image, k=8):
         """
         Convert MNIST image to graph representation
-    
+
         Args:
             image: 28x28 numpy array
             k: number of nearest neighbors for each pixel
-    
+
         Returns:
             torch_geometric.data.Data object
         """
         h, w = image.shape
-    
+
         # Create node features (pixel intensities)
         node_features = image.flatten().reshape(-1, 1)  # Shape: (784, 1)
-    
+
         # Create coordinate matrix for each pixel
         coords = []
         for i in range(h):
             for j in range(w):
                 coords.append([i, j])
         coords = np.array(coords)
-    
+
         # Find k-nearest neighbors for each pixel based on spatial distance
         nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='ball_tree').fit(coords)
         distances, indices = nbrs.kneighbors(coords)
-    
+
         # Create edge list (exclude self-connections)
         edge_list = []
         for i in range(len(indices)):
             for j in range(1, len(indices[i])):  # Skip first index (self)
                 edge_list.append([i, indices[i][j]])
-    
+
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         node_features = torch.tensor(node_features, dtype=torch.float)
-    
+
         return Data(x=node_features, edge_index=edge_index)
 
     def create_graph_dataset(dataset, max_samples=1000):
@@ -99,20 +99,20 @@ def _(
         """
         graph_data = []
         labels = []
-    
+
         for i, (image, label) in enumerate(dataset):
             if i >= max_samples:
                 break
-            
+
             # Convert PIL image to numpy array
             image_np = image.numpy().squeeze()
-        
+
             # Create graph from image
             graph = image_to_graph(image_np)
             if i == 0:
                 visualize_mnist_graph(image_np, label)
             graph.y = torch.tensor([label], dtype=torch.long)
-        
+
             graph_data.append(graph)
             labels.append(label)
 
@@ -122,7 +122,7 @@ def _(
             else:
                 if i % 10 == 0:
                     print(f"Processed {i+1}/{max_samples} samples")
-    
+
         return graph_data
 
     def create_graph_from_image(image, k=8):
@@ -142,7 +142,7 @@ def _(
         node_features = torch.tensor(image.flatten(), dtype=torch.float).unsqueeze(1)
 
         return edge_index, node_features
-    
+
     def visualize_mnist_graph(image, label, k=8, threshold=0.1):
         """Visualize MNIST image and its graph representation"""
         # Convert to graph
@@ -235,51 +235,51 @@ def _(np, plt, torch, tqdm, umap):
         model.eval()
         embeddings = []
         labels = []
-    
+
         with torch.no_grad():
             for batch in tqdm(loader, desc="Extracting embeddings"):
                 batch = batch.to(device)
                 _, batch_embeddings = model(batch.x, batch.edge_index, batch.batch, return_embeddings=True)
-            
+
                 embeddings.append(batch_embeddings.cpu().numpy())
                 labels.append(batch.y.cpu().numpy())
-    
+
         embeddings = np.vstack(embeddings)
         labels = np.concatenate(labels)
-    
+
         return embeddings, labels
 
     def visualize_embeddings(embeddings, labels, title="GNN Embeddings", save_path=None):
         """Create UMAP visualization of embeddings colored by labels"""
         print("Computing UMAP projection...")
-    
+
         # Fit UMAP
         umap_model = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=42)
         embeddings_2d = umap_model.fit_transform(embeddings)
-    
+
         # Create the plot
         plt.figure(figsize=(12, 8))
-    
+
         # Create scatter plot with different colors for each digit
         colors = plt.cm.tab10(np.linspace(0, 1, 10))
-    
+
         for digit in range(10):
             mask = labels == digit
             plt.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], 
                        c=[colors[digit]], label=f'Digit {digit}', 
                        alpha=0.7, s=20)
-    
+
         plt.title(title, fontsize=16)
         plt.xlabel('UMAP 1', fontsize=12)
         plt.ylabel('UMAP 2', fontsize=12)
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-    
+
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.show()
-    
+
         return embeddings_2d
     return extract_embeddings, visualize_embeddings
 
@@ -300,11 +300,11 @@ def _(F, GCNConv, global_mean_pool, nn, torch, tqdm):
 
             # Global pooling to get graph-level representation
             embeddings = global_mean_pool(x, batch)
-        
+
             # Classification
             logits = self.classifier(embeddings)
             output = F.log_softmax(logits, dim=1)
-        
+
             if return_embeddings:
                 return output, embeddings
             return output
@@ -316,26 +316,27 @@ def _(F, GCNConv, global_mean_pool, nn, torch, tqdm):
         total = 0
         pbar = tqdm(loader, desc="Training", leave=False)
         for batch in pbar:
+            print(f"batch {batch}")
             batch = batch.to(device)
             optimizer.zero_grad()
-        
+
             out = model(batch.x, batch.edge_index, batch.batch)
             loss = F.nll_loss(out, batch.y)
-        
+
             loss.backward()
             optimizer.step()
-        
+
             total_loss += loss.item()
             pred = out.argmax(dim=1)
             correct += (pred == batch.y).sum().item()
             total += batch.y.size(0)
-        
+
             # Update progress bar
             pbar.set_postfix({
                 'loss': f'{loss.item():.4f}',
                 'acc': f'{correct/total:.4f}'
             })
-    
+
         return total_loss / len(loader), correct / total
 
     def test_epoch(model, loader, device):
@@ -355,7 +356,7 @@ def _(F, GCNConv, global_mean_pool, nn, torch, tqdm):
                 total += batch.y.size(0)
 
         return total_loss / len(loader), correct / total
-            
+
     return SimpleGNN, test_epoch, train_epoch
 
 
@@ -377,23 +378,23 @@ def _(
             # Set device
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Using device: {device}")
-    
+
         # Load MNIST dataset
         transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.1307,), (0.3081,))
         ])
-    
+
         train_dataset = datasets.MNIST(str(Path(__file__).parents[1] / "data" / "raw"), train=True, download=True, transform=transform)
         test_dataset = datasets.MNIST(str(Path(__file__).parents[1] / "data" / "raw"), train=False, transform=transform)
-    
+
         # Convert to graph datasets (using smaller subsets for demonstration)
         print("Converting training images to graphs...")
         train_graphs = create_graph_dataset(train_dataset, max_samples=1000)
-    
+
         print("Converting test images to graphs...")
         test_graphs = create_graph_dataset(test_dataset, max_samples=200)
-    
+
         train_loader = DataLoader(train_graphs, batch_size=32, shuffle=True)
         test_loader = DataLoader(test_graphs, batch_size=32, shuffle=False)
 
@@ -401,34 +402,34 @@ def _(
         model = SimpleGNN(input_dim = 1, hidden_dim = 64, output_dim = 10).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
         print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
-    
+
     # Training loop
         num_epochs = 10
         print(f"Starting training for {num_epochs} epochs...")
-    
+
         for epoch in range(num_epochs):
             print(f"\nEpoch {epoch+1}/{num_epochs}")
             train_loss, train_acc = train_epoch(model, train_loader, optimizer, device)
             test_loss, test_acc = test_epoch(model, test_loader, device)
-        
+
             print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
             print(f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.4f}")
-    
+
         print("\nTraining completed!")
-    
+
         # Visualize embeddings
         print("\nExtracting and visualizing embeddings...")
-    
+
         # Extract embeddings from training data
         train_embeddings, train_labels = extract_embeddings(model, train_loader, device)
-    
+
         # Create UMAP visualization
         train_embeddings_2d = visualize_embeddings(
             train_embeddings, train_labels, 
             title="GNN Training Embeddings (UMAP Projection)",
             save_path="gnn_train_embeddings.png"
         )
-    
+
         # Also visualize test embeddings
         test_embeddings, test_labels = extract_embeddings(model, test_loader, device)
         test_embeddings_2d = visualize_embeddings(
@@ -436,15 +437,15 @@ def _(
             title="GNN Test Embeddings (UMAP Projection)",
             save_path="gnn_test_embeddings.png"
         )
-    
+
         # Print some statistics
         print(f"\nEmbedding Statistics:")
         print(f"Training embeddings shape: {train_embeddings.shape}")
         print(f"Test embeddings shape: {test_embeddings.shape}")
         print(f"Embedding dimension: {train_embeddings.shape[1]}")
-    
+
         return model, train_embeddings_2d, test_embeddings_2d
-    
+
     return (main,)
 
 
