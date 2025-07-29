@@ -1,0 +1,177 @@
+
+% Section will be
+% 1. Spatial Transcriptomics: what is it?
+% 2. Imaging-based Spatial Transcriptomics and its challenges
+% 3. Integration between im-scRNAseq and scRNAseq
+% 4. Cell regulatory mechanisms and GRNs
+% 5. Estimating the activity of biologically relevant features
+% 6. Results of spatially emergent patterns.
+% 7. Cell-Cell communication background with analogy with 
+%    antennas that send and receive at different frequencies and
+%    cells that subscribe to different frequencies as if they were
+%    subscribing to differnet social networks.
+% 8. Modeling the cell-cell communication system with Multilayer networks
+% 9. Structural analysis and tensor decomposition of the multilayer network
+% 10.Appendix:
+%    - Vignette of N2SIMBA
+%    - Vignette of metagenomics analysis
+% 11.Pubblications, teaching and courses
+\section{Spatial transcriptomics: what is it? {[01:30]}}
+
+\begin{frame}
+    \frametitle{Introduction to Spatial Transcriptomics}
+    \begin{block}{}
+        \begin{itemize}
+            \item History of how single cell measurements went from bulk to capture the state of individual cells in space.
+            \item Reference to the Nature methods awards.
+            \item Analogy and definition of biological terms that will be used in the talk:
+                \begin{itemize}
+                    \item \textbf{Cell}: a biological unit that can be measured.
+                    \item \textbf{Feature}: a biological measurement of a cell, such as a gene expression level.
+                    \item \textbf{Cell type}: a group of cells that share similar features.
+                    \item \textbf{Cell state}: the condition of a cell at a given time, which can change over time.
+                \end{itemize}
+        \end{itemize}
+    \end{block}
+    The definitions aims to avoid using excessive biological terms but stick to \texttt{observations}, \texttt{state}, \texttt{features}.
+\end{frame}
+
+\section{Imaging-based Spatial Transcriptomics and its challenges {[02:30]}}
+
+\begin{frame}
+    \frametitle{Imaging-based spatial transcriptomics and its challenges}
+    \begin{block}{}
+        \begin{itemize}
+            \item Thee different technologies to measure spatial transcriptomics (without details).
+            \item im-scRNAseq from ISH data can be collected with MERFISH, seqFISH, and other technologies. (without details)
+            \item Comparison with scRNAseq and challenges of being limited to hypothesis testing.
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\begin{frame}
+    \frametitle{Integration between im-scRNAseq and scRNAseq}
+    \begin{block}{}
+        \begin{itemize}
+            \item Integration between im-scRNAseq and scRNAseq aims to estimate the location of the signal of cells based
+                on the ones that are measured in space.
+            \item TANGRAM solves an optimization problem estimating the probability of optimal location 
+                of the scRNA-seq cells in space.
+            \item TANGRAM is the suggested method for MERFISH data from a benchmark, but requires careful handling.
+            \item Reference to a thesis student working on it and argue that some refinement is needed.
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\section{Exploiting prior knowledge to perform feature selection {[01:30]}}
+
+\begin{frame}
+    \frametitle{Biologically informed feature selection}
+    \begin{block}{}
+        \begin{itemize}
+            \item Cells are measured in space, but may differ in their state even if of the same type.
+            \item Something must be regulating the state of the cells. Their regulatory mechanism.
+            \item THeir regulatory mechanism is stored in Gene Regulatory Networks (GRNs).
+            \item We estimate the activity of each regulatory element in space using DecoupleR.
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\begin{frame}
+    \frametitle{Results of spatially emergent patterns from unmeasured features}
+    \begin{block}{}
+        \begin{itemize}
+            \item Results of spatially emergent patterns of colocalized features with biological relevance.
+            \item Results of ISMB\/ECCB 2025 poster \/ IJCNN2025 paper.
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\section{Cell-Cell communication {[01:00]}}
+
+\begin{frame}
+    \frametitle{Cell-Cell communication background}
+    Now i phrase it in a way that uses biological terms but will eventually be the ones i state at the beginning of the talk.
+    \begin{block}{}
+        \begin{itemize}
+            \item Cell-Cell communication is the process by which cells exchange information.
+            \item Analogy with antennas that send and receive at different frequencies.
+            \item Analogy with users that subscribe to different social networks, where they can only communicate with those that subscribe to the same network.
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\section{Complex networks and multilayer networks {[02:00]}}
+\begin{frame}
+    \frametitle{\scriptsize{Future works: modeling the cell-cell communication with multilayer networks}}
+    \begin{block}{}
+        \begin{itemize}
+            \item Cell-Cell communication is a system of systems, and multilayer networks can model them.
+            \item Each layer of the multilayer network represents a different type of communication.
+            \item Each node represents a cell, and each edge represents a communication between two cells.
+            \item The multilayer network can be used to analyze the structure of the communication system.
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\begin{frame}
+    \frametitle{\scriptsize{Future works: structural analysis and tensor decomposition of the multilayer network}}
+    \begin{block}{}
+        \begin{itemize}
+            \item Structural analysis of the multilayer network can reveal patterns of communication.
+            \item Tensor decomposition can be used to extract features from the multilayer network.
+            \item Questions to be answered:
+                \begin{itemize}
+                    \item How do different layers of the multilayer network interact?
+                    \item What are the most important nodes in the network?
+                    \item How can we use the multilayer network to predict cell-Cell communication?
+                \end{itemize}
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\section{Appendix {[01:00]}}
+
+\begin{frame}
+    \frametitle{Appendix: Vignette of N2SIMBA}
+    \begin{block}{}
+        \begin{itemize}
+            \item N2SIMBA is a simulator of bacteria communities driven by a bacteria interaction networks.
+            \item bacteria interacts with each other using the cross feeding mechanism.
+            \item Interaction networks are unknown and this tool aims to produce realistic synthetic data that reconstruction methods can use to assess their performance.
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\begin{frame}
+    \frametitle{Appendix: Vignette of diversity analysis of piglets}
+    \begin{block}{}
+        \begin{itemize}
+            \item Analysis of the diversity of piglets in a farm that was suspected to present C. Difficile infection.
+            \item Results show that the safety guidelines of the farm allowed to avoid the infection.
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\section{Publications, teaching and courses {[00:15]}}
+
+\begin{frame}
+    \frametitle{Publications, teaching and courses}
+    \begin{block}{}
+        \begin{itemize}
+            \item List of publications
+            \item Which courses I took
+            \item Which courses I assisted
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\begin{frame}
+    \frametitle{Thank you!}
+    \begin{block}{}
+        \begin{itemize}
+            \item Questions?
+            \item Contact me at ...
+        \end{itemize}
+    \end{block}
+\end{frame}

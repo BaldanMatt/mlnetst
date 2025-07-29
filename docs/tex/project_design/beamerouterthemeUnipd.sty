@@ -18,7 +18,7 @@
         \end{minipage}
         \vspace{1.8ex}
     \end{beamercolorbox}
-    \begin{textblock*}{0.33\paperwidth}(0.68\paperwidth, -4.2ex)
+    \begin{textblock*}{0.33\paperwidth}(0.75\paperwidth, -4.2ex)
         \includegraphics[height=3.75ex]{media/unipd_logo.png}
     \end{textblock*}
 }
@@ -40,6 +40,15 @@
         }%
         \vskip0cm%
     \fi
+}
+\defbeamertemplate*{footline}{pres theme improved}{%
+    \leavevmode%
+    \begin{beamercolorbox}[wd=\paperwidth,ht=2.5ex,dp=1ex,leftskip=1ex,rightskip=1ex]{frametitle}%
+        \usebeamerfont{footer font}%
+        \makebox[0.25\paperwidth][l]{\insertshorttitle}%
+        \makebox[0.5\paperwidth][l]{\insertsectionhead}%
+        \makebox[0.20\paperwidth][r]{\insertframenumber{} \beamer@unipd@pageofpages{} \inserttotalframenumber}%
+    \end{beamercolorbox}%
 }
 
 %% Disable navigation symbols

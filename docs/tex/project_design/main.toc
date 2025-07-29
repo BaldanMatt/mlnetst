@@ -1,0 +1,7 @@
+\beamer@sectionintoc {1}{Spatial transcriptomics: what is it? {[01:30]}}{3}{0}{1}
+\beamer@sectionintoc {2}{Imaging-based Spatial Transcriptomics and its challenges {[02:30]}}{4}{0}{2}
+\beamer@sectionintoc {3}{Exploiting prior knowledge to perform feature selection {[01:30]}}{6}{0}{3}
+\beamer@sectionintoc {4}{Cell-Cell communication {[01:00]}}{8}{0}{4}
+\beamer@sectionintoc {5}{Complex networks and multilayer networks {[02:00]}}{9}{0}{5}
+\beamer@sectionintoc {6}{Appendix {[01:00]}}{11}{0}{6}
+\beamer@sectionintoc {7}{Publications, teaching and courses {[00:15]}}{13}{0}{7}

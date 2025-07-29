@@ -12,11 +12,6 @@
 \DeclareOptionBeamer{logo}[\empty]{%
     \PassOptionsToPackage{logo=#1}{beamerinnerthemeunipd}}
     
-%% Design new blocks
-\newtheorem{definition}{Definition}
-\newenvironment<>{definition}[1]{%
-    \setbeamercolor{block title}{fg=white,bg=green!50!black}%
-    \begin{block}#2{#1}}{\end{block}}
 \ProcessOptionsBeamer
 
 \mode<presentation>
