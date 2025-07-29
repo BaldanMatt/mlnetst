@@ -1,6 +1,8 @@
 import torch
 import numpy as np
-from typing import Tuple, List, Union, Dict
+from typing import Tuple, List, Union, Dict, Any
+import pandas as pd
+import networkx as nx
 
 def create_layer_gene_mapping(ligand_ids: List[str], receptor_ids: List[str], var_names: List[str]) -> Dict[int, Dict[str, Dict[str, List[int]]]]:
     """
@@ -80,6 +82,66 @@ def select_intra_layers(ligand_ids: List[str], var_names: List[str]) -> List[int
         List of indices corresponding to the selected layers
     """
     return [var_names.tolist().index(ligand_id) for ligand_id in ligand_ids if ligand_id in var_names]
+
+def extract_suitable_layers_from_net(net: nx.DiGraph, ligand_ids: List[str], receptor_ids: List[str]) -> Any:
+    """
+    This function wants to find the set of nodes that are within the set of Ligands that are reachable for each node of a network that is within Receptor set.
+    """
+    if not isinstance(net, nx.DiGraph):
+        raise TypeError("Input must be a networkx DiGraph")
+    if not isinstance(ligand_ids, list) or not isinstance(receptor_ids, list):
+        raise TypeError("ligand_ids and receptor_ids must be lists")
+    if not all(isinstance(x, str) for x in ligand_ids) or not all(isinstance(x, str) for x in receptor_ids):
+        raise TypeError("All elements in ligand_ids and receptor_ids must be strings")
+    
+    # Find all nodes that are ligands that are reachable from any receptor node
+    reachable_from_receptors = set()
+    for r in net.nodes():
+        if r in receptor_ids:
+            # Get all nodes reachable from this receptor
+            reachable_nodes = nx.descendants(net, r)
+            # Add only those that are ligands
+            reachable_from_receptors.update([n for n in reachable_nodes if n in ligand_ids])
+    
+    # Create pairs of receptor and reachable ligand nodes
+    pairs = []
+    for r in receptor_ids:
+        if r in net.nodes():
+            for l in reachable_from_receptors:
+                if l in net.nodes():
+                    pairs.append((r, l))
+
+    return pairs
+
+def select_inter_layers(suitable_pairs, layer_mapping: Dict[int, Dict[str, Dict[str, List[int]]]]) -> List[Tuple[int, int]]:
+    """
+    Select inter-layer pairs based on suitable pairs and layer mapping.
+    
+    Args:
+        suitable_pairs: List of tuples (receptor, ligand) representing suitable pairs
+        layer_mapping: Layer mapping dictionary as created by create_layer_gene_mapping
+    Returns:
+        List of tuples (src_layer, dst_layer) representing inter-layer pairs
+    """
+    if not isinstance(suitable_pairs, list) or not all(isinstance(x, tuple) and len(x) == 2 for x in suitable_pairs):
+        raise TypeError("suitable_pairs must be a list of tuples (receptor, ligand)")
+    if not isinstance(layer_mapping, dict):
+        raise TypeError("layer_mapping must be a dictionary")
+    
+    inter_layer_pairs = []
+    
+    for receptor, ligand in suitable_pairs:
+        # Find layers for receptor
+        src_layers = [idx for idx, info in layer_mapping.items() if info["receptor"]["gene_id"] == receptor]
+        # Find layers for ligand
+        dst_layers = [idx for idx, info in layer_mapping.items() if info["ligand"]["gene_id"] == ligand]
+        
+        # Create pairs of (src_layer, dst_layer)
+        for src in src_layers:
+            for dst in dst_layers:
+                inter_layer_pairs.append((src, dst))
+    
+    return inter_layer_pairs    
 
 def get_expression_value_batch(data, gene_indexes, toll_complex):
     if len(gene_indexes) > 1:  # gene_id is a complex
@@ -164,7 +226,6 @@ def compute_interlayer_interactions(data, dist_matrix, src_layer: int, dst_layer
     del ligand_vals, receptor_vals, diagonal_values, nonzero_positions, nonzero_values
     return pair_indices, pair_values
     
-
 def compute_distance_matrix(cell_indexes, coord_x, coord_y, toll_distance=1e-6) -> torch.FloatTensor:
     """
     Compute a distance matrix for cells based on their coordinates.
@@ -186,9 +247,6 @@ def compute_distance_matrix(cell_indexes, coord_x, coord_y, toll_distance=1e-6) 
     ) + toll_distance  # Add tolerance to avoid division by zero
     dist_matrix = dist_matrix.fill_diagonal_(torch.inf)  # Remove self-interactions by setting diagonal to 0
     return dist_matrix
-
-
-
 
 def get_layer_interaction(sparse_tensor, alpha, beta=None):
     """
@@ -231,7 +289,6 @@ def get_layer_interaction(sparse_tensor, alpha, beta=None):
     )
     
     return layer_sparse.to_dense()
-
 
 def get_cell_interactions(sparse_tensor, cell_idx):
     """
@@ -295,3 +352,119 @@ def get_cell_interactions(sparse_tensor, cell_idx):
         'outgoing': outgoing_sparse,
         'incoming': incoming_sparse
     }
+
+def select_lr_pairs(lrdb: pd.DataFrame, var_names: list[str], l: int):
+    """
+    Select number of ligand-receptor pairs from a DataFrame that are contained in dataset features.
+    Args:
+        lrdb: DataFrame containing ligand-receptor pairs with columns 'source' and 'target'
+        var_names: List of variable names (genes) available in the dataset
+        l: Number of pairs to select    
+    Returns:
+        DataFrame with selected ligand-receptor pairs, or None if not enough valid pairs are found
+    """
+        # Convert subdata.var_names to lowercase set for faster lookup
+    valid_genes = set(g.lower() for g in var_names)
+
+    # 2. Define a helper to check if all components of a complex are in valid_genes
+    def is_valid_complex(gene_string):
+        components = gene_string.split("_")
+        return all(comp.lower() in valid_genes for comp in components)
+
+    # 3. Apply filtering to both source and target
+    filtered_df = lrdb[
+    lrdb["source"].apply(is_valid_complex) &
+       lrdb["target"].apply(is_valid_complex)
+    ]
+    # I need to transform only source and target columns to lowercase
+    filtered_df[["source", "target"]] = filtered_df[["source", "target"]].apply(lambda x: x.str.lower())
+    if len(filtered_df) >= l:
+        sample_lr = filtered_df.sample(n=l, replace=False)
+        notFound = False
+    else:
+        print(f"❌ Not enough valid interactions (found {len(filtered_df)}, needed {l})")
+        sample_lr = None  # Or handle appropriately
+    return sample_lr
+
+if __name__ == "__main__":
+    from mlnetst.core.knowledge.networks import load_resource
+    import anndata as ad
+    from pathlib import Path
+    import logging
+
+    class ColoredFormatter(logging.Formatter):
+        """Custom formatter to add colors to log levels"""
+        
+        COLORS = {
+            logging.DEBUG: "\033[94m",    # Blue
+            logging.INFO: "\033[92m",     # Green
+            logging.WARNING: "\033[93m",  # Yellow
+            logging.ERROR: "\033[91m",    # Red
+            logging.CRITICAL: "\033[95m", # Magenta
+        }
+        RESET = "\033[0m"  # Reset color
+        
+        def format(self, record):
+            # Get the original formatted message
+            message = super().format(record)
+            # Add color based on log level
+            color = self.COLORS.get(record.levelno, "")
+            return f"{color}{message}{self.RESET}"
+
+    # Set up colored logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    
+    # Create colored formatter
+    formatter = ColoredFormatter(
+        fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    console_handler.setFormatter(formatter)
+    
+    # Add handler to logger
+    logger.addHandler(console_handler)
+
+    net = load_resource("nichenet")
+    print(net)
+
+    x_hat_s = ad.read_h5ad(Path(__file__).parents[2] / "data" / "processed" / "mouse1_slice153_x_hat_s.h5ad")
+    print(x_hat_s)
+
+    lrdb = select_lr_pairs(
+        net,
+        var_names=x_hat_s.var_names.tolist(),
+        l=5
+    )
+    logger.info(lrdb)
+    ligand_ids = lrdb['source']
+    receptor_ids = lrdb['target']
+    layer_mapping = create_layer_gene_mapping(
+        ligand_ids=ligand_ids.tolist(),
+        receptor_ids=receptor_ids.tolist(),
+        var_names=x_hat_s.var_names,
+    )
+    logger.info(layer_mapping)
+
+    net_graph_version = nx.from_pandas_edgelist(
+        net,
+        source='source',
+        target='target',
+        edge_attr=['weight',"provenance"],
+        create_using=nx.DiGraph
+    )
+    suitable_pairs = extract_suitable_layers_from_net(
+        net=net_graph_version, 
+        ligand_ids=ligand_ids.tolist(),
+        receptor_ids=receptor_ids.tolist()
+    )
+    logger.info(suitable_pairs)
+    inter_layer_pairs = select_inter_layers(
+        suitable_pairs=suitable_pairs,
+        layer_mapping=layer_mapping
+    )
+    logger.info(inter_layer_pairs)
