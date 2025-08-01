@@ -12,76 +12,11 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 from typing import Any
 import logging
 
-COLORS_FOR_LOGGER = {
-    "INFO": "\033[92m",  # Green
-    "WARNING": "\033[93m",  # Yellow
-    "ERROR": "\033[91m",  # Red
-    "DEBUG": "\033[94m",  # Blue
-    "RESET": "\033[0m"  # Reset to default color
-}
-
-def get_colored_logger(name: str, mode: str | None = None, log_file: str | None = None) -> logging.Logger:
-    """
-    Create a logger with specified name and optional file output.
-    
-    Args:
-        name: Name of the logger
-        mode: Logging level mode ('debug' or 'info')
-        log_file: Optional file to log messages to
-    
-    Returns:
-        Configured logger instance with no propagation to parent loggers
-    """
-    # Get or create logger
-    logger = logging.getLogger(name)
-    
-    # Prevent propagation to parent loggers
-    logger.propagate = False
-    
-    # Clear any existing handlers
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    # Set logging level
-    if mode == "debug":
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
-        if mode is not None and mode != "info":
-            print(f"Unknown logging mode: {mode}. Defaulting to INFO.")
-
-    # Custom formatter for colored output
-    class ColoredFormatter(logging.Formatter):
-        def format(self, record):
-            # Get color code for level, default to RESET if not found
-            color = COLORS_FOR_LOGGER.get(record.levelname, COLORS_FOR_LOGGER["RESET"])
-            # Apply color to the entire message
-            log_fmt = (f"{color}%(asctime)s - %(name)s - %(levelname)s - "
-                      f"%(message)s{COLORS_FOR_LOGGER['RESET']}")
-            formatter = logging.Formatter(log_fmt, datefmt="%Y-%m-%d %H:%M:%S")
-            return formatter.format(record)
-
-    # Console handler setup
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG if mode == "debug" else logging.INFO)
-    console_handler.setFormatter(ColoredFormatter())
-    logger.addHandler(console_handler)
-    
-    # File handler setup if requested
-    if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.DEBUG if mode == "debug" else logging.INFO)
-        # Use non-colored formatter for file output
-        file_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        file_handler.setFormatter(logging.Formatter(file_format, datefmt="%Y-%m-%d %H:%M:%S"))
-        logger.addHandler(file_handler)
-    
-    return logger
-
 def assemble_multilayer_network(data, lr_db,
                                 batch_size: int | None = None,
                                 toll_complexes: float = 1e-6, toll_distance: float = 1e-6,
                                 build_intra: bool =True, build_inter: bool =True,
+                                mode: str = "tensor",
                                 logger: Any | None = None, n_jobs:int = 1,
                                 ) -> Any:
 
@@ -248,109 +183,74 @@ def assemble_multilayer_network(data, lr_db,
         del dist_matrix
     logger.info("Assembling sparse tensor...")
     # Combine all indices and values
-    if indices_list:
-        # Concatenate all indices and values
-        all_indices = torch.cat(indices_list, dim=1)  # Shape: [4, total_nonzero_elements]
-        all_values = torch.cat(values_list, dim=0)  # Shape: [total_nonzero_elements]
+    if mode == "tensor":
+        if indices_list:
+            # Concatenate all indices and values
+            all_indices = torch.cat(indices_list, dim=1)  # Shape: [4, total_nonzero_elements]
+            all_values = torch.cat(values_list, dim=0)  # Shape: [total_nonzero_elements]
 
-        # Create sparse tensor in COO format
-        mlnet_sparse = torch.sparse_coo_tensor(
-            indices=all_indices,
-            values=all_values,
-            size=(num_observations, num_layers, num_observations, num_layers),
-            dtype=torch.float32
-        )
-        # Coalesce to merge any duplicate indices - Good practice from pytorch documentation
-        mlnet_sparse = mlnet_sparse.coalesce()
-        logger.info(f"Sparse tensor shape: {mlnet_sparse.shape}, non-zero elements: {mlnet_sparse._nnz()}")
-    else:
-        # All zeros - Create empty sparse tensor
-        logger.info("No non-zero elements found, returning empty sparse tensor.")
-        mlnet_sparse = torch.sparse_coo_tensor(
-                indices=torch.zeros((4, 0), dtype=torch.long),
-                values=torch.zeros(0, dtype=torch.float32),
+            # Create sparse tensor in COO format
+            mlnet_sparse = torch.sparse_coo_tensor(
+                indices=all_indices,
+                values=all_values,
                 size=(num_observations, num_layers, num_observations, num_layers),
                 dtype=torch.float32
-        )
+            )
+            # Coalesce to merge any duplicate indices - Good practice from pytorch documentation
+            mlnet_sparse = mlnet_sparse.coalesce()
+            logger.info(f"Sparse tensor shape: {mlnet_sparse.shape}, non-zero elements: {mlnet_sparse._nnz()}")
+        else:
+            # All zeros - Create empty sparse tensor
+            logger.info("No non-zero elements found, returning empty sparse tensor.")
+            mlnet_sparse = torch.sparse_coo_tensor(
+                    indices=torch.zeros((4, 0), dtype=torch.long),
+                    values=torch.zeros(0, dtype=torch.float32),
+                    size=(num_observations, num_layers, num_observations, num_layers),
+                    dtype=torch.float32
+            )
+            # Memory usage comparison
+            total_elements = num_observations * num_layers * num_observations * num_layers
+            nonzero_elements = mlnet_sparse._nnz()
+            sparsity = (1 - nonzero_elements / total_elements) * 100
+            # Estimated memory usage
+            dense_memory_gb = total_elements * 4 / (1024**3)  # 4 bytes per float32
+            sparse_memory_gb = (nonzero_elements * 4 + nonzero_elements * 4 * 4) / (1024**3)  # values + indices
+            logger.info(f"Dense tensor would use: {dense_memory_gb:.2f} GB, sparse tensor uses: {sparse_memory_gb:.2f} GB, savings: {((dense_memory_gb - sparse_memory_gb) / dense_memory_gb * 100):.1f}%, sparsity: {sparsity:.2f}% ({nonzero_elements:,} / {total_elements:,} non-zero)")
+            
+    elif mode == "pymnet_multinetwork":
+        import pymnet
+        # Create a pymnet multiplex network
+        mlnet_sparse = pymnet.MultilayerNetwork(aspects=1, directed=True)
+        # Add nodes
+        for i in range(num_observations):
+            mlnet_sparse.add_node(i)
+        # Add layers
+        for alpha, layer_info in layer_map.items():
+            mlnet_sparse.add_layer(layer_info["layer_name"])
+            
+        logger.debug(mlnet_sparse.get_layers())
+        # Add edges
+        for counter_set, set_of_edges in enumerate(indices_list):
+            logger.debug("Adding edges for set %d", counter_set)
+            sender_indexes, layer_sender_indices, receivers_indexes, receivers_layer_indexes = set_of_edges
+            for counter_value, (i, alpha, j, beta) in enumerate(zip(sender_indexes, layer_sender_indices, receivers_indexes, receivers_layer_indexes)):
+                alpha_name = layer_map[alpha.item()]["layer_name"]
+                beta_name = layer_map[beta.item()]["layer_name"]
+                logger.debug("Adding edge from %d %s to %d %s with value %f", i, alpha_name, j, beta_name, values_list[counter_set][counter_value])
+                mlnet_sparse[i.item(), j.item(), alpha_name, beta_name] = values_list[counter_set][counter_value].item()
+    
+    elif mode == "pymnet_multiplex":
+        import pymnet
+        # Create a pymnet multiplex network
+        raise NotImplementedError("pymnet_multiplex mode is not implemented yet. This mode is constraining \
+                                  interlayer interactions to be automatically filled by the pymnet library.")
+        
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Supported modes are 'tensor', 'pymnet_multinetwork', and 'pymnet_multiplex'.")
+            
     end_building_time = time.time()
     total_time = end_building_time - start_building_time
     logger.info(f"Sparse network construction time: {total_time:.2f} s")
-    # Memory usage comparison
-    total_elements = num_observations * num_layers * num_observations * num_layers
-    nonzero_elements = mlnet_sparse._nnz()
-    sparsity = (1 - nonzero_elements / total_elements) * 100
-    # Estimated memory usage
-    dense_memory_gb = total_elements * 4 / (1024**3)  # 4 bytes per float32
-    sparse_memory_gb = (nonzero_elements * 4 + nonzero_elements * 4 * 4) / (1024**3)  # values + indices
-    logger.info(f"Dense tensor would use: {dense_memory_gb:.2f} GB, sparse tensor uses: {sparse_memory_gb:.2f} GB, savings: {((dense_memory_gb - sparse_memory_gb) / dense_memory_gb * 100):.1f}%, sparsity: {sparsity:.2f}% ({nonzero_elements:,} / {total_elements:,} non-zero)")
+    
     # Return the sparse tensor
     return mlnet_sparse
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--num_layers", "-L", type=int)
-    parser.add_argument("--num_cells", "--N", type=int)
-    args = parser.parse_args()
-    print("DEBUGGING build_network.py")
-    x_hat_s = ad.read_h5ad(Path(__file__).parents[3] / "data" / "processed" / "mouse1_slice153_x_hat_s.h5ad")
-
-    print(x_hat_s)
-    source, target = "Astro", "L2/3 IT"
-    subdata = x_hat_s[x_hat_s.obs["subclass"].isin([source,target]), :]
-    print(subdata)
-
-    N = args.num_cells
-    L = args.num_layers
-
-    print(f"[WARN] Number of cells: {N}, number of layers: {L}")
-    RANDOM_STATE = 42
-    np.random.seed(RANDOM_STATE)
-    torch.manual_seed(RANDOM_STATE)
-
-    if N == len(subdata.obs_names):
-        cell_indexes = subdata.obs_names
-    else:
-        cell_indexes = subdata.obs.sample(N, replace = False).index
-    notFound = True
-    lr_interactions_df = load_resource("mouseconsensus")
-
-    # Convert subdata.var_names to lowercase set for faster lookup
-    valid_genes = set(g.lower() for g in subdata.var_names)
-
-    # 2. Define a helper to check if all components of a complex are in valid_genes
-    def is_valid_complex(gene_string):
-        components = gene_string.split("_")
-        return all(comp.lower() in valid_genes for comp in components)
-
-    # 3. Apply filtering to both source and target
-    filtered_df = lr_interactions_df[
-    lr_interactions_df["source"].apply(is_valid_complex) &
-        lr_interactions_df["target"].apply(is_valid_complex)
-    ]
-
-    if len(filtered_df) >= L:
-        sample_lr = filtered_df.sample(n=L)
-        notFound = False
-    else:
-        print(f"❌ Not enough valid interactions (found {len(filtered_df)}, needed {L})")
-        sample_lr = None  # Or handle appropriately
-
-    new_subdata = subdata[cell_indexes, :]
-    new_sample_lr = sample_lr.copy()
-    new_sample_lr = new_sample_lr.sample(L, replace=False).reset_index(drop=True)
-    print(f"Building the following layers: ")
-    print([x+"->"+y
-        for x,y in zip(new_sample_lr["source"].tolist(), new_sample_lr["target"].tolist())])
-    compute_tensor_memory_usage(N,L) 
-    new_mlnet = assemble_multilayer_network(
-        data=new_subdata,
-        lr_db=new_sample_lr,
-        batch_size=None,
-        toll_complexes=1e-6,
-        toll_distance=1e-6,
-        build_intra=True,
-        build_inter=True,
-        logger=get_colored_logger("Build network", mode="debug"),
-        n_jobs=1,
-    )

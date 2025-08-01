@@ -6,14 +6,26 @@ def build_tensor_from_supra_adjacency_matrix(supra_matrix, n, l):
     Build a tensor from a supra-adjacency matrix.
 
     Args:
-        supra_matrix (torch.Tensor): Input tensor of shape (N * L, N * L).
+        supra_matrix (torch.Tensor): Sparse Input tensor of shape (N * L, N * L).
         n (int): Number of nodes.
         l (int): Number of layers.
 
     Returns:
         torch.Tensor: Tensor of shape (N, L, N, L).
     """
-    return supra_matrix.view(n, l, n, l)
+    if isinstance(supra_matrix, torch.Tensor) and supra_matrix.is_sparse:
+        # Convert sparse coo tensor to dense tensor
+        indices = supra_matrix.indices()
+        values = supra_matrix.values()
+        new_indices = torch.zeros(4, indices.shape[1], dtype=torch.long)
+        new_indices[1] = indices[0] // n  # Layer index for first
+        new_indices[0] = indices[0] % n   # Node index for first
+        new_indices[3] = indices[1] // n  # Layer index for second
+        new_indices[2] = indices[1] % n   # Node index for second
+        t = torch.sparse_coo_tensor(new_indices, values, size=(n, l, n, l))
+        return t
+    else:
+        return supra_matrix.reshape(l, n, l, n).permute(1, 0, 3, 2)
 
 def build_supra_adjacency_matrix_from_tensor(t):
     """
@@ -30,14 +42,17 @@ def build_supra_adjacency_matrix_from_tensor(t):
     # Sanity check that the tensor is 4D
     if len(t.shape) != 4 or t.shape[0] != n or t.shape[2] != n or t.shape[1] != l or t.shape[3] != l:
         raise ValueError(f"Input tensor must be of shape ({n}, {l}, {n}, {l}), but got {t.shape}")
-    # Reshape the tensor to a supra-adjacency matrix
-    matrix = torch.zeros(n * l, n * l, device=t.device)
-    for l_i in range(l):
-        for l_j in range(l):
-            matrix[n * l_i:n * (l_i + 1), n * l_j:n * (l_j + 1)] = t[:, l_i, :, l_j]
-    print(f"TRUE: \n{matrix}")
-    matrix = t.permute(1, 0, 3, 2).reshape(n * l, n * l)
-    return matrix
+    if isinstance(t, torch.Tensor) and t.is_sparse:
+        # We need to convert the sparse coo tensor to a sparse supra adjacency matrix
+        indices = t.indices()
+        new_indices = torch.zeros(2, indices.shape[1], dtype=torch.long)
+        new_indices[0] = indices[1] * n + indices[0]
+        new_indices[1] = indices[3] * n + indices[2]
+        values = t.values()
+        matrix = torch.sparse_coo_tensor(new_indices, values, size=(n * l, n * l))
+        return matrix
+    else:
+        return t.permute(1, 0, 3, 2).reshape(n * l, n * l)
     
 def binarize_matrix(matrix):
     """
@@ -51,8 +66,14 @@ def binarize_matrix(matrix):
     """
     if not isinstance(matrix, torch.Tensor):
         raise TypeError("Input must be a torch.Tensor")
-    
-    return (matrix != 0).to(torch.float32)  # Convert non-zero elements to 1.0
+    if matrix.is_sparse:
+        # Convert sparse matrix to dense
+        matrix = matrix.coalesce()  # Ensure the sparse matrix is in COO format
+        values = matrix.values()
+        new_values = torch.ones_like(values)
+        return torch.sparse_coo_tensor(matrix.indices(), new_values, size=matrix.size())
+    else:
+        return (matrix != 0).to(torch.float32)  # Convert non-zero elements to 1.0
 
 def get_aggregate_from_tensor(t):
     """

@@ -66,6 +66,7 @@ def create_layer_gene_mapping(ligand_ids: List[str], receptor_ids: List[str], va
                 "gene_id": receptor_id,
                 "component_indices": receptor_indices
             }
+            layer_info["layer_name"] = f"{ligand_id}_{receptor_id}"
             layer_map[layer_idx] = layer_info
             
     return layer_map
@@ -143,63 +144,93 @@ def select_inter_layers(suitable_pairs, layer_mapping: Dict[int, Dict[str, Dict[
     
     return inter_layer_pairs    
 
-def get_expression_value_batch(data, gene_indexes, toll_complex):
+def get_expression_value_batch(data, gene_indexes, toll_complex, zero_threshold: float=1e-2) -> torch.Tensor:
     if len(gene_indexes) > 1:  # gene_id is a complex
         expr = torch.tensor(data[:, gene_indexes].X.astype(np.float32),
                             dtype=torch.float32)
-        return torch.exp(torch.mean(torch.log(expr + toll_complex), dim=1)).squeeze()
+        values = torch.exp(torch.mean(torch.log(expr + toll_complex), dim=1)).squeeze()
     else:
-        return torch.tensor(data[:, gene_indexes[0]].X.astype(np.float32),
+        values = torch.tensor(data[:, gene_indexes[0]].X.astype(np.float32),
                             dtype=torch.float32).squeeze()
+        
+    # Zero out small values
+    values[values < zero_threshold] = 0.0
+    return values
 
-def compute_intralayer_interactions(data, dist_matrix, src_idx, layer_src_info: Dict[str, List[int]], toll_complex: float) -> Tuple[torch.Tensor, torch.Tensor]:
+def compute_intralayer_interactions(data, dist_matrix, src_idx: int, 
+                                  layer_src_info: Dict[str, Dict[str, List[int]]], 
+                                  toll_complex: float) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Compute intralayer interactions for a specific layer from a sparse tensor.
+    Compute intralayer interactions for a specific layer.
     
     Args:
-        sparse_tensor: torch.sparse.FloatTensor
-        alpha: Layer index to compute interactions for
+        data: Expression data matrix
+        dist_matrix: Distance matrix between cells
+        src_idx: Layer index
+        layer_src_info: Dictionary containing ligand and receptor information
+        toll_complex: Tolerance for complex computation
         
     Returns:
-        Tuple of lists containing cell indices and interaction values
+        Tuple[torch.Tensor, torch.Tensor]: 
+            - Indices tensor of shape (4, K) for K non-zero interactions
+            - Values tensor of shape (K,) containing interaction strengths
     """
+    # Extract gene information
     ligand_name = layer_src_info["ligand"]["gene_id"]
     ligand_indices = layer_src_info["ligand"]["component_indices"]
     receptor_name = layer_src_info["receptor"]["gene_id"]
     receptor_indices = layer_src_info["receptor"]["component_indices"]
+    
+    # Get expression values
     ligand_vals = get_expression_value_batch(data, ligand_indices, toll_complex)
     receptor_vals = get_expression_value_batch(data, receptor_indices, toll_complex)
-    # print(f"Shape of ligand values: {ligand_vals.shape}, receptor values: {receptor_vals.shape}")  # Debugging output
-    # print(f"Shape of outer product: {torch.outer(ligand_vals, receptor_vals).shape}")  # Debugging output
-    # print(f"Shape of distance matrix: {dist_matrix.shape}")  # Debugging output
-    # print(f"How many inf values in distance matrix: {torch.isinf(dist_matrix).sum().item()}")  # Debugging output
-    # compute interaction matrix as outer product of ligand and receptor values
+    
+    # Compute interaction matrix
     interaction_matrix = torch.outer(ligand_vals, receptor_vals) / dist_matrix
-    # Check for NaN values in interaction matrix
-    # print(f"Number of NaN values in interaction matrix: {torch.isnan(interaction_matrix).sum().item()}")  # Debugging output
-    # print(f"Number of non-zero elements in interaction matrix before removing self-interactions: {interaction_matrix.nonzero().size(0)}")  # Debugging output
-    # sanity check that there are no self-interactions
-    interaction_matrix.fill_diagonal_(0)  # Remove self-interactions
-    # print(f"Number of non-zero elements in interaction matrix {interaction_matrix.nonzero()} for layer {src_idx} with ligand {ligand_name} and receptor {receptor_name}")  # Debugging output
-    # Get non-zero indices and values
+    
+    # Remove self-interactions
+    interaction_matrix.fill_diagonal_(0)
+    
+    # Get non-zero positions and values
     nonzero_positions = torch.nonzero(interaction_matrix, as_tuple=False)
+    
+    # Handle empty case
+    if nonzero_positions.numel() == 0:
+        return torch.empty((4, 0), dtype=torch.long), torch.empty(0, dtype=torch.float32)
+    
+    # Extract values for non-zero positions
     nonzero_values = interaction_matrix[nonzero_positions[:, 0], nonzero_positions[:, 1]]
     
-    # convert to 4D indices: [i, alpha, j, alpha]
-    layer_indices = []
-    layer_values = []
-    if len(nonzero_positions)>0:
-        i_indices = nonzero_positions[:, 0]
-        j_indices = nonzero_positions[:, 1]
-        alpha_indices = torch.full_like(i_indices, src_idx)
-        # Stack as [dim0, dim1, dim2, dime3] = [i, alpha, j, alpha]
-        layer_indices = torch.stack([i_indices, alpha_indices, j_indices, alpha_indices])
-        layer_values = nonzero_values
-    del interaction_matrix, ligand_vals, receptor_vals, nonzero_positions, nonzero_values
-    return layer_indices, layer_values
+    # Create 4D indices [i, alpha, j, alpha]
+    i_indices = nonzero_positions[:, 0]
+    j_indices = nonzero_positions[:, 1]
+    alpha_indices = torch.full_like(i_indices, src_idx)
+    
+    # Stack indices in correct order
+    layer_indices = torch.stack([i_indices, alpha_indices, j_indices, alpha_indices])
+    
+    # Cleanup
+    del interaction_matrix, ligand_vals, receptor_vals, nonzero_positions
+    
+    return layer_indices, nonzero_values
 
 def compute_interlayer_interactions(data, dist_matrix, src_layer: int, dst_layer: int, src_info: Dict[str, List[int]], dst_info: Dict[str, List[int]], toll_complex: float) -> Tuple[torch.Tensor, torch.Tensor]:
-
+    """
+    Compute interlayer interactions between two layers.
+    Handles all cases of nonzero positions (0-d tensor, 1-d tensor, or 2-d tensor).
+    
+    Args:
+        data: Expression data
+        dist_matrix: Distance matrix between cells
+        src_layer: Source layer index
+        dst_layer: Destination layer index
+        src_info: Source layer gene information
+        dst_info: Destination layer gene information
+        toll_complex: Tolerance for complex computation
+        
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Pair indices and values
+    """
     receptor_src_name = src_info["receptor"]["gene_id"]
     receptor_src_indices = src_info["receptor"]["component_indices"]
     ligand_dst_name = dst_info["ligand"]["gene_id"]
@@ -207,24 +238,43 @@ def compute_interlayer_interactions(data, dist_matrix, src_layer: int, dst_layer
     receptor_vals = get_expression_value_batch(data, receptor_src_indices, toll_complex)
     ligand_vals = get_expression_value_batch(data, ligand_dst_indices, toll_complex)
 
+     # Compute diagonal values
     diagonal_values = receptor_vals * ligand_vals
-    nonzero_positions = torch.nonzero(diagonal_values, as_tuple=False).squeeze()
-    if nonzero_positions.numel() == 0:
-        return torch.empty((0, 4), dtype=torch.long), torch.empty(0, dtype=torch.float32)
+    
+    # Get nonzero positions, handling all possible cases
+    raw_nonzero = torch.nonzero(diagonal_values, as_tuple=False)
+    
+    # Handle empty case
+    if raw_nonzero.numel() == 0:
+        print(f"No interactions found for src_layer {src_layer} and dst_layer {dst_layer}")
+        return torch.empty((4, 0), dtype=torch.long), torch.empty(0, dtype=torch.float32)
+    
+    # Convert to 1D tensor regardless of input dimensionality
+    if raw_nonzero.dim() == 0:
+        # Single value case
+        nonzero_positions = raw_nonzero.unsqueeze(0)
+    elif raw_nonzero.dim() == 1:
+        # Already 1D
+        nonzero_positions = raw_nonzero
+    else:
+        # 2D case - flatten to 1D
+        nonzero_positions = raw_nonzero.view(-1)
+    
+    # Get values for nonzero positions
     nonzero_values = diagonal_values[nonzero_positions]
     
-    # convert to 4D indices: [i, alpha, i, beta]
-    pair_indices = []
-    pair_values = []
-    if len(nonzero_positions) > 0:
-        i_indices = nonzero_positions
-        src_indexes = torch.full_like(i_indices, src_layer)
-        dst_indexes = torch.full_like(i_indices, dst_layer)
-        # Stack as [dim0, dim1, dim2, dime3] = [i, alpha, i, beta]
-        pair_indices = torch.stack([i_indices, src_indexes, i_indices, dst_indexes])
-        pair_values = nonzero_values
-    del ligand_vals, receptor_vals, diagonal_values, nonzero_positions, nonzero_values
-    return pair_indices, pair_values
+    # Create indices for the sparse tensor
+    i_indices = nonzero_positions
+    src_indexes = torch.full_like(i_indices, src_layer)
+    dst_indexes = torch.full_like(i_indices, dst_layer)
+    
+    # Stack as [dim0, dim1, dim2, dim3] = [i, alpha, i, beta]
+    pair_indices = torch.stack([i_indices, src_indexes, i_indices, dst_indexes])
+    
+    # Cleanup
+    del ligand_vals, receptor_vals, diagonal_values, raw_nonzero, nonzero_positions
+    
+    return pair_indices, nonzero_values
     
 def compute_distance_matrix(cell_indexes, coord_x, coord_y, toll_distance=1e-6) -> torch.FloatTensor:
     """

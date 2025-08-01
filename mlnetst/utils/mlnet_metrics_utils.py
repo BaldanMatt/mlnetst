@@ -1,97 +1,272 @@
 import torch
+import pymnet
 from mlnetst.utils.mlnet_utils import get_aggregate_from_supra_adjacency_matrix, build_supra_adjacency_matrix_from_tensor, binarize_matrix
 
-def compute_indegree(adjacency_matrix):
+def get_diagonal_blocks(n: int, l: int, device: torch.device = None) -> torch.Tensor:
     """
-    Compute the indegree of each node in a directed graph represented by an adjacency matrix.
+    Create a mask for diagonal blocks in a supra-adjacency matrix.
 
     Args:
-        adjacency_matrix (torch.Tensor): Adjacency matrix of shape (N, N).
+        n (int): Number of nodes.
+        l (int): Number of layers.
+        device (torch.device, optional): Device to create the tensor on. Defaults to None.
 
     Returns:
-        torch.Tensor: Indegree of each node.
+        torch.Tensor: A boolean mask tensor of shape (N * L, N * L) with True values in the diagonal blocks.
     """
-    if not isinstance(adjacency_matrix, torch.Tensor):
-        raise TypeError("Input must be a torch.Tensor")
+    # Create basic NxN block of ones
+    block = torch.ones(n, n, dtype=torch.bool, device=device)
     
-    if len(adjacency_matrix.shape) != 2 or adjacency_matrix.shape[0] != adjacency_matrix.shape[1]:
-        raise ValueError("Input must be a square matrix of shape (N, N)")
+    # Create initial empty mask
+    mask = torch.zeros(n*l, n*l, dtype=torch.bool, device=device)
     
-    return torch.sum(adjacency_matrix, dim=0)  # Sum along rows to get indegree
+    # Fill diagonal blocks
+    for i in range(l):
+        start_idx = i * n
+        end_idx = (i + 1) * n
+        mask[start_idx:end_idx, start_idx:end_idx] = block
+        
+    return mask
 
-def compute_outdegree(adjacency_matrix):
+def get_non_diagonal_blocks(n: int, l: int, device: torch.device = None) -> torch.Tensor:
     """
-    Compute the outdegree of each node in a directed graph represented by an adjacency matrix.
+    Create a mask for non-diagonal blocks in a supra-adjacency matrix.
+
+    For a matrix of size (N*L x N*L) composed of LxL blocks of size (NxN),
+    creates a boolean mask that keeps only the non-diagonal blocks.
 
     Args:
-        adjacency_matrix (torch.Tensor): Adjacency matrix of shape (N, N).
+        n (int): Number of nodes.
+        l (int): Number of layers.
+        device (torch.device, optional): Device to create the tensor on. Defaults to None.
 
     Returns:
-        torch.Tensor: Outdegree of each node.
+        torch.Tensor: A boolean mask tensor of shape (N*L, N*L) with True values 
+                     in the non-diagonal blocks.
+    
+    Example for N=2, L=2:
+        [[0 0 1 1]
+         [0 0 1 1]
+         [1 1 0 0]
+         [1 1 0 0]]
     """
-    if not isinstance(adjacency_matrix, torch.Tensor):
-        raise TypeError("Input must be a torch.Tensor")
+    # Create full mask of ones
+    mask = torch.ones(n*l, n*l, dtype=torch.bool, device=device)
     
-    if len(adjacency_matrix.shape) != 2 or adjacency_matrix.shape[0] != adjacency_matrix.shape[1]:
-        raise ValueError("Input must be a square matrix of shape (N, N)")
+    # Create basic NxN block of ones for diagonal
+    block = torch.ones(n, n, dtype=torch.bool, device=device)
     
-    return torch.sum(adjacency_matrix, dim=1)  # Sum along columns to get outdegree
+    # Zero out diagonal blocks
+    for i in range(l):
+        start_idx = i * n
+        end_idx = (i + 1) * n
+        mask[start_idx:end_idx, start_idx:end_idx] = ~block
+        
+    return mask
 
-def get_multi_outdegree(matrix, n, l):
+def compute_indegree(supra_adjacency_matrix, n, l):
     """
-    Return the muti-out-degree, not accounting for interlinks
+    Compute the indegree of each node, considering them as replica nodes in a multilayer network.
+
+    It is required to know how many nodes and layers are in the network to correctly compute the indegree from the supraadjacency matrix.
+    Args:
+        adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.
+    Returns:
+    
+    """
+    
+    # mask the supra-adjacency matrix to keep only the diagonal blocks
+    diagonal_blocks_mask = get_diagonal_blocks(n, l, device=supra_adjacency_matrix.device)
+    
+    bin_supra_adjacency_matrix = binarize_matrix(supra_adjacency_matrix)
+    # apply the mask
+    masked_matrix = bin_supra_adjacency_matrix * diagonal_blocks_mask
+    
+    # Compute the indegree (sum along columns)
+    layers_indegrees = masked_matrix.sum(dim=0)
+    
+    if layers_indegrees.is_sparse:
+        # Handle sparse tensor
+        indices = layers_indegrees.indices()[0]  # Get indices
+        values = layers_indegrees.values()       # Get values
+        
+        # Create a dense tensor to accumulate results
+        nodes_indegrees = torch.zeros(n, device=supra_adjacency_matrix.device)
+        
+        # Sum values for corresponding nodes (using modulo)
+        node_indices = indices % n
+        nodes_indegrees.index_add_(0, node_indices, values)
+    else:
+        # Handle dense tensor - reshape and sum across layers
+        nodes_indegrees = layers_indegrees.reshape(l, n).sum(dim=0)
+    
+    return nodes_indegrees
+
+def compute_instrength(supra_adjacency_matrix, n, l):
+    """
+    Compute the indegree of each node, considering them as replica nodes in a multilayer network.
+
+    It is required to know how many nodes and layers are in the network to correctly compute the instrength from the supraadjacency matrix.
+    Args:
+        adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.
+    Returns:
+    
+    """
+    
+    # mask the supra-adjacency matrix to keep only the diagonal blocks
+    diagonal_blocks_mask = get_diagonal_blocks(n, l, device=supra_adjacency_matrix.device)
+    
+    
+    # apply the mask
+    masked_matrix = supra_adjacency_matrix * diagonal_blocks_mask
+
+    # Compute the instrength (sum along columns)
+    layers_instrengths = masked_matrix.sum(dim=0)
+
+    if layers_instrengths.is_sparse:
+        # Handle sparse tensor
+        indices = layers_instrengths.indices()[0]  # Get indices
+        values = layers_instrengths.values()       # Get values
+
+        # Create a dense tensor to accumulate results
+        nodes_instrengths = torch.zeros(n, device=supra_adjacency_matrix.device)
+        
+        # Sum values for corresponding nodes (using modulo)
+        node_indices = indices % n
+        nodes_instrengths.index_add_(0, node_indices, values)
+    else:
+        # Handle dense tensor - reshape and sum across layers
+        nodes_instrengths = layers_instrengths.reshape(l, n).sum(dim=0)
+
+    return nodes_instrengths
+
+def compute_outdegree(supra_adjacency_matrix, n, l):
+    """
+    Compute the outdegree of each node, considering them as replica nodes in a multilayer network.
 
     Args:
-        matrix (torch.Tensor): the supra-adjacency matrix
-        n (int): number of nodes in the supra-adjacency matrix
-        l (int): number of layers in the supra-adjacency matrix
+        supra_adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.
 
     Returns:
-        torch.Tensor: the multi-out-degree of each node
+        torch.Tensor: A tensor of shape (N * L) containing the outdegree of each node.
     """
-    aggregate = get_aggregate_from_supra_adjacency_matrix(binarize_matrix(matrix), n, l)
-    multioutdegree = torch.sum(aggregate, dim=1)  # Sum along columns to get multi-outdegree
+    bin_supra_adjacency_matrix = binarize_matrix(supra_adjacency_matrix)
 
-    return multioutdegree
+    # mask the supra-adjacency matrix to keep only the diagonal blocks
+    diagonal_blocks_mask = get_diagonal_blocks(n, l, device=supra_adjacency_matrix.device)
 
-def get_multi_indegree(matrix, n, l):
+    # apply the mask
+    masked_matrix = bin_supra_adjacency_matrix * diagonal_blocks_mask
+
+    # compute the outdegree (sum along rows)
+    layers_outdegrees = masked_matrix.sum(dim=1)
+    if layers_outdegrees.is_sparse:
+        # Handle sparse tensor
+        indices = layers_outdegrees.indices()[0]
+        values = layers_outdegrees.values()
+        # Create a dense tensor to accumulate results
+        nodes_outdegrees = torch.zeros(n, device=supra_adjacency_matrix.device)
+        # Sum values for corresponding nodes (using modulo)
+        node_indices = indices % n
+        nodes_outdegrees.index_add_(0, node_indices, values)
+    else:
+        # Handle dense tensor - reshape and sum across layers
+        nodes_outdegrees = layers_outdegrees.reshape(l, n).sum(dim=0)
+    
+    # consider that every n elements of the outdegrees correspond to a single node
+    return nodes_outdegrees
+    
+
+def compute_multi_indegree(supra_adjacency_matrix, n, l):
     """
-    Return the multi-in-degree, not accounting for interlinks
+    Compute the multiindegree of each node, considering them as replica nodes in a multilayer network. 
+    This function computes the indegree for each node across all layers.
 
     Args:
-        matrix (torch.Tensor): the supra-adjacency matrix
-        n (int): number of nodes in the supra-adjacency matrix
-        l (int): number of layers in the supra-adjacency matrix
+        supra_adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.
 
     Returns:
-        torch.Tensor: the multi-in-degree of each node
+        torch.Tensor: A tensor of shape (N * L) containing the multiindegree of each node.
     """
-    aggregate = get_aggregate_from_supra_adjacency_matrix(binarize_matrix(matrix), n, l)
-    multiindegree = torch.sum(aggregate, dim=0)  # Sum along rows to get multi-indegree
+    bin_supra_adjacency_matrix = binarize_matrix(supra_adjacency_matrix)
 
-    return multiindegree
+    # mask the supra-adjacency matrix to keep only the diagonal blocks
+    non_diagonal_blocks_mask = get_non_diagonal_blocks(n, l, device=supra_adjacency_matrix.device)
 
+    # apply the mask
+    masked_matrix = bin_supra_adjacency_matrix * non_diagonal_blocks_mask
 
-if __name__ == "__main__":
-    # Example usage with 3 nodes and 2 layers
-    n = 3
-    l = 2
-    # init 4d tensor
-    torch.random.manual_seed(0)  # For reproducibility
-    t = torch.randn(n, l, n, l)  # Example tensor of shape (3, 2, 3, 2)
-    print("Input tensor shape:", t.shape)
-    # Remove some interactions to manipulate degree
-    t[0, 0, 1, 1] = 0  # Remove interaction between node 0 and node 1 in layer 0
-    t[1, 0, 2, 1] = 0  # Remove interaction between node 1 and node 2 in layer 1
-    t[2, 1, 1, 0] = 0
+    # compute the multiindegree (sum along columns)
+    layers_multiindegrees = masked_matrix.sum(dim=0)
+    if layers_multiindegrees.is_sparse:
+        # Handle sparse tensor
+        indices = layers_multiindegrees.indices()[0]
+        values = layers_multiindegrees.values()
+        # Create a dense tensor to accumulate results
+        nodes_multiindegrees = torch.zeros(n, device=supra_adjacency_matrix.device)
+        # Sum values for corresponding nodes (using modulo)
+        node_indices = indices % n
+        nodes_multiindegrees.index_add_(0, node_indices, values)
+    else:
+        # Handle dense tensor - reshape and sum across layers
+        nodes_multiindegrees = layers_multiindegrees.reshape(l, n).sum(dim=0)
     
-    supra_matrix = build_supra_adjacency_matrix_from_tensor(t)
-    print("Supra-adjacency matrix shape:", supra_matrix.shape)  # Should print
-    print(supra_matrix)
+    # consider that every n elements of the multiindegrees correspond to a single node
+    return nodes_multiindegrees
     
+def compute_multi_outdegree(supra_adjacency_matrix, n, l):
+    """
+    Compute the multioutdegree of each node, considering them as replica nodes in a multilayer network. 
+    This function computes the outdegree for each node across all layers.
+
+    Args:
+        supra_adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.
+
+    Returns:
+        torch.Tensor: A tensor of shape (N * L) containing the multioutdegree of each node.
+    """
+    # mask the supra-adjacency matrix to keep only the diagonal blocks
+    non_diagonal_blocks_mask = get_non_diagonal_blocks(n, l, device=supra_adjacency_matrix.device)
+
+    # apply the mask
+    masked_matrix = supra_adjacency_matrix * non_diagonal_blocks_mask
+
+    # compute the multioutdegree (sum along rows)
+    layers_multioutdegrees = masked_matrix.sum(dim=1)
+    # consider that every n elements of the multioutdegrees correspond to a single node
+    nodes_multioutdegrees = layers_multioutdegrees.reshape(l, n).sum(dim=0)
+    return nodes_multioutdegrees
+
+def compute_total_degree(supra_adjacency_matrix, n, l):
+    """
+    Compute the total degree of each node, considering them as replica nodes in a multilayer network.
+    The total degree is the sum of indegree and outdegree.
+
+    Args:
+        supra_adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.
+
+    Returns:
+        torch.Tensor: A tensor of shape (N * L) containing the total degree of each node.
+    """
+    indegree = compute_indegree(supra_adjacency_matrix, n, l)
+    outdegree = compute_outdegree(supra_adjacency_matrix, n, l)
+    multi_indegree = compute_multi_indegree(supra_adjacency_matrix, n, l)
+    multi_outdegree = compute_multi_outdegree(supra_adjacency_matrix, n, l)
+    return indegree + outdegree + multi_indegree + multi_outdegree
+
+def compute_clustering_coefficient(net: pymnet.MultilayerNetwork):
     
-    print("Indegree:", compute_indegree(supra_matrix))
-    print("Outdegree:", compute_outdegree(supra_matrix))
-    print("Multi-outdegree:", get_multi_outdegree(supra_matrix, n, l))
-    print("Multi-indegree:", get_multi_indegree(supra_matrix, n, l))
+    return pymnet.gcc_zhang(net)
     
