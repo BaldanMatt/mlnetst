@@ -6,13 +6,13 @@ import numpy as np
 import pandas as pd
 import anndata as ad
 from mlnetst.core.knowledge.networks import load_resource
-from mlnetst.utils.sparse_utils import compute_distance_matrix, compute_intralayer_interactions, compute_interlayer_interactions, create_layer_gene_mapping, select_intra_layers, create_layer_gene_mapping
+from mlnetst.utils.build_network_utils import compute_distance_matrix, compute_intralayer_interactions, compute_interlayer_interactions, create_layer_gene_mapping, select_inter_layers, create_layer_gene_mapping
 from mlnetst.utils import compute_tensor_memory_usage
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from typing import Any
 import logging
 
-def assemble_multilayer_network(data, lr_db,
+def assemble_multilayer_network(data, lr_db, resource: str,
                                 batch_size: int | None = None,
                                 toll_complexes: float = 1e-6, toll_distance: float = 1e-6,
                                 build_intra: bool =True, build_inter: bool =True,
@@ -41,9 +41,9 @@ def assemble_multilayer_network(data, lr_db,
     elif n_jobs <= 0:
         n_jobs = 1
 
-    if n_jobs > 1:
-        logger.warning(f"Parallel processing is not working, fallback to sequential") if logger else None
-        n_jobs = 1
+    # if n_jobs > 1:
+    #     logger.warning(f"Parallel processing is not working, fallback to sequential") if logger else None
+    #     n_jobs = 1
     # Determine logger and verbose mode
     if logger is not None and isinstance(logger, logging.Logger):
         ...
@@ -57,11 +57,20 @@ def assemble_multilayer_network(data, lr_db,
     receptor_ids = lr_db["target"].str.lower().tolist()
     layer_map = create_layer_gene_mapping(ligand_ids, receptor_ids, data.var_names)
     if logger:
-        logger.debug(f"Layer map created with {len(layer_map)} entries.\n\t{layer_map}")
+        logger.debug(f"Layer map created with {len(layer_map)} entries present in data.")
+    num_layers = len(layer_map)
+    
     # Init indices and values lists
     indices_list = []  # Will store [dim0, dim1, dim2, dim3] indices
     values_list = []  # Will store corresponding values
     
+    
+    if build_inter:
+        # compute suitable pairs for interlayer interactions
+        logger.info("Selecting interlayer pairs for interactions...")
+        layer_pairs = select_inter_layers(lr_db, layer_map, resource=resource, inter_coupling="rtl", logger=logger)
+
+
     # Extract cell indexes
     cell_indexes = data.obs_names
     
@@ -122,15 +131,14 @@ def assemble_multilayer_network(data, lr_db,
                         logger.info(f"Intralayer progress: {completed_layers}/{num_layers} layers ({progress_pct:.1f}%) - ETA: {eta:.1f}s")
         intralayer_time = time.time() - intralayer_start
         logger.info(f"All intralayer interactions computed in {intralayer_time:.2f} s")
-        
+    
     if build_inter:
         # Interlayer interactions: different layers (α ≠ β), same cells (i == j)
         if logger:
             logger.info("Computing interlayer interactions...")
         interlayer_start = time.time()
         completed_pairs = 0
-
-        layer_pairs = [(alpha, beta) for alpha in layer_map.keys() for beta in layer_map.keys() if alpha != beta]
+        #layer_pairs = [(alpha, beta) for alpha in layer_map.keys() for beta in layer_map.keys() if alpha != beta]
 
         if n_jobs == 1:
             # Sequential processing
@@ -177,17 +185,28 @@ def assemble_multilayer_network(data, lr_db,
                         logger.info(f"All interlayer interactions computed in {elapsed:.2f} s")
         interlayer_time = time.time() - interlayer_start
         logger.info(f"All interlayer interactions computed in {interlayer_time:.2f} s")
-        
+    
     # Clean up distance matrix if it was created
     if 'dist_matrix' in locals():
         del dist_matrix
     logger.info("Assembling sparse tensor...")
+    # Create mapping from original indices to new indices
+    layer_idx_map = {old_idx: new_idx for new_idx, old_idx in enumerate(layer_map.keys())}
     # Combine all indices and values
     if mode == "tensor":
         if indices_list:
             # Concatenate all indices and values
             all_indices = torch.cat(indices_list, dim=1)  # Shape: [4, total_nonzero_elements]
+            # Remap layer indices (indices at positions 1 and 3)
+            all_indices[1] = torch.tensor([layer_idx_map[idx.item()] for idx in all_indices[1]], 
+                                        dtype=all_indices.dtype,
+                                        device=all_indices.device)
+            all_indices[3] = torch.tensor([layer_idx_map[idx.item()] for idx in all_indices[3]], 
+                                        dtype=all_indices.dtype,
+                                        device=all_indices.device)
+            del indices_list  # Free memory
             all_values = torch.cat(values_list, dim=0)  # Shape: [total_nonzero_elements]
+            del values_list  # Free memory
 
             # Create sparse tensor in COO format
             mlnet_sparse = torch.sparse_coo_tensor(
@@ -196,6 +215,7 @@ def assemble_multilayer_network(data, lr_db,
                 size=(num_observations, num_layers, num_observations, num_layers),
                 dtype=torch.float32
             )
+            del all_indices, all_values  # Free memory
             # Coalesce to merge any duplicate indices - Good practice from pytorch documentation
             mlnet_sparse = mlnet_sparse.coalesce()
             logger.info(f"Sparse tensor shape: {mlnet_sparse.shape}, non-zero elements: {mlnet_sparse._nnz()}")
@@ -208,14 +228,14 @@ def assemble_multilayer_network(data, lr_db,
                     size=(num_observations, num_layers, num_observations, num_layers),
                     dtype=torch.float32
             )
-            # Memory usage comparison
-            total_elements = num_observations * num_layers * num_observations * num_layers
-            nonzero_elements = mlnet_sparse._nnz()
-            sparsity = (1 - nonzero_elements / total_elements) * 100
-            # Estimated memory usage
-            dense_memory_gb = total_elements * 4 / (1024**3)  # 4 bytes per float32
-            sparse_memory_gb = (nonzero_elements * 4 + nonzero_elements * 4 * 4) / (1024**3)  # values + indices
-            logger.info(f"Dense tensor would use: {dense_memory_gb:.2f} GB, sparse tensor uses: {sparse_memory_gb:.2f} GB, savings: {((dense_memory_gb - sparse_memory_gb) / dense_memory_gb * 100):.1f}%, sparsity: {sparsity:.2f}% ({nonzero_elements:,} / {total_elements:,} non-zero)")
+        # Memory usage comparison
+        total_elements = num_observations * num_layers * num_observations * num_layers
+        nonzero_elements = mlnet_sparse._nnz()
+        sparsity = (1 - nonzero_elements / total_elements) * 100
+        # Estimated memory usage
+        dense_memory_gb = total_elements * 4 / (1024**3)  # 4 bytes per float32
+        sparse_memory_gb = (nonzero_elements * 4 + nonzero_elements * 4 * 4) / (1024**3)  # values + indices
+        logger.info(f"Dense tensor would use: {dense_memory_gb:.2f} GB, sparse tensor uses: {sparse_memory_gb:.2f} GB, savings: {((dense_memory_gb - sparse_memory_gb) / dense_memory_gb * 100):.1f}%, sparsity: {sparsity:.2f}% ({nonzero_elements:,} / {total_elements:,} non-zero)")
             
     elif mode == "pymnet_multinetwork":
         import pymnet

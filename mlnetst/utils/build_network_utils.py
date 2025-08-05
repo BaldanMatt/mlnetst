@@ -3,6 +3,8 @@ import numpy as np
 from typing import Tuple, List, Union, Dict, Any
 import pandas as pd
 import networkx as nx
+import logging
+from mlnetst.core.knowledge.networks import load_resource
 
 def create_layer_gene_mapping(ligand_ids: List[str], receptor_ids: List[str], var_names: List[str]) -> Dict[int, Dict[str, Dict[str, List[int]]]]:
     """
@@ -114,33 +116,95 @@ def extract_suitable_layers_from_net(net: nx.DiGraph, ligand_ids: List[str], rec
 
     return pairs
 
-def select_inter_layers(suitable_pairs, layer_mapping: Dict[int, Dict[str, Dict[str, List[int]]]]) -> List[Tuple[int, int]]:
+def check_complex_descendancy(net: nx.DiGraph, source_components: List[str], 
+                            target_components: List[str]) -> bool:
+    """
+    Check if all source components have all target components in their descendancy.
+    
+    Args:
+        net: NetworkX directed graph
+        source_components: List of source gene components
+        target_components: List of target gene components
+        
+    Returns:
+        bool: True if all components satisfy the descendancy condition
+    """
+    # For each source component, get its descendants once
+    source_descendants = {
+        src: set(nx.descendants(net, src)) 
+        for src in source_components
+    }
+    
+    # Check if all source components can reach all target components
+    return all(
+        all(target in descendants 
+            for target in target_components)
+        for descendants in source_descendants.values()
+    )
+
+def select_inter_layers(suitable_pairs: pd.DataFrame,
+                        layer_mapping: Dict[int, Dict[str, Dict[str, List[int]]]],
+                        resource: str = "nichenet", 
+                        inter_coupling: str = "combinatorial",
+                        logger: logging.Logger | None = None) -> List[Tuple[int, int]]:
     """
     Select inter-layer pairs based on suitable pairs and layer mapping.
     
     Args:
-        suitable_pairs: List of tuples (receptor, ligand) representing suitable pairs
+        suitable_pairs: DataFrame of tuples (receptor, ligand) representing suitable pairs
         layer_mapping: Layer mapping dictionary as created by create_layer_gene_mapping
     Returns:
         List of tuples (src_layer, dst_layer) representing inter-layer pairs
     """
-    if not isinstance(suitable_pairs, list) or not all(isinstance(x, tuple) and len(x) == 2 for x in suitable_pairs):
-        raise TypeError("suitable_pairs must be a list of tuples (receptor, ligand)")
-    if not isinstance(layer_mapping, dict):
-        raise TypeError("layer_mapping must be a dictionary")
-    
     inter_layer_pairs = []
     
-    for receptor, ligand in suitable_pairs:
-        # Find layers for receptor
-        src_layers = [idx for idx, info in layer_mapping.items() if info["receptor"]["gene_id"] == receptor]
-        # Find layers for ligand
-        dst_layers = [idx for idx, info in layer_mapping.items() if info["ligand"]["gene_id"] == ligand]
+    if inter_coupling == "combinatorial":    
+        for receptor, ligand in suitable_pairs:
+            # Find layers for receptor
+            src_layers = [idx for idx, info in layer_mapping.items() if info["receptor"]["gene_id"] == receptor]
+            # Find layers for ligand
+            dst_layers = [idx for idx, info in layer_mapping.items() if info["ligand"]["gene_id"] == ligand]
+            
+            # Create pairs of (src_layer, dst_layer)
+            for src in src_layers:
+                for dst in dst_layers:
+                    inter_layer_pairs.append((src, dst))
+    
+    elif inter_coupling == "rtl": # stands for receptor-to-tf-to-targetgene/ligand
         
-        # Create pairs of (src_layer, dst_layer)
-        for src in src_layers:
-            for dst in dst_layers:
-                inter_layer_pairs.append((src, dst))
+        net_df = load_resource(resource)
+        suitable_pairs[["source", "target"]] = suitable_pairs[["source", "target"]].apply(lambda x: x.str.lower())
+        net_df[["source", "target"]] = net_df[["source", "target"]].apply(lambda x: x.str.lower())
+        net = nx.from_pandas_edgelist(
+            net_df,
+            source='source',
+            target='target',
+            create_using=nx.DiGraph
+        )
+        logger.debug(f"Network loaded with {net.number_of_nodes()} nodes and {net.number_of_edges()} edges")
+        completed_layers = 0
+        num_layers = len(layer_mapping)
+        for src_layer, src_info in layer_mapping.items():
+            # Get source receptor components
+            source_receptor = src_info["receptor"]["gene_id"]
+            source_components = source_receptor.split("_")
+            
+            for dst_layer, dst_info in layer_mapping.items():
+                if src_layer == dst_layer:
+                    continue  # Skip self-loops
+                    
+                # Get target ligand components
+                target_ligand = dst_info["ligand"]["gene_id"]
+                target_components = target_ligand.split("_")
+                
+                # Check if all components satisfy the descendancy condition
+                if check_complex_descendancy(net, source_components, target_components):
+                    logger.debug(f"Adding inter-layer pair: {src_layer} -> {dst_layer} for source receptor: {source_receptor} and target ligand: {target_ligand}")
+                    inter_layer_pairs.append((src_layer, dst_layer))
+            completed_layers += 1
+            if logger and (completed_layers % max(1, num_layers // 10) == 0):
+                logger.info(f"Processed {completed_layers}/{num_layers} layers for inter-layer pairs")
+        logger.info(f"Inter-layer pairs: {inter_layer_pairs} - {len(inter_layer_pairs)} pairs found")
     
     return inter_layer_pairs    
 
@@ -159,7 +223,7 @@ def get_expression_value_batch(data, gene_indexes, toll_complex, zero_threshold:
 
 def compute_intralayer_interactions(data, dist_matrix, src_idx: int, 
                                   layer_src_info: Dict[str, Dict[str, List[int]]], 
-                                  toll_complex: float) -> Tuple[torch.Tensor, torch.Tensor]:
+                                  toll_complex: float) -> Tuple[torch.ShortTensor, torch.FloatTensor]:
     """
     Compute intralayer interactions for a specific layer.
     
@@ -184,7 +248,7 @@ def compute_intralayer_interactions(data, dist_matrix, src_idx: int,
     # Get expression values
     ligand_vals = get_expression_value_batch(data, ligand_indices, toll_complex)
     receptor_vals = get_expression_value_batch(data, receptor_indices, toll_complex)
-    
+    print(f"How many ligand zeros and receptor zeros: {torch.sum(ligand_vals == 0)} {torch.sum(receptor_vals == 0)}")
     # Compute interaction matrix
     interaction_matrix = torch.outer(ligand_vals, receptor_vals) / dist_matrix
     
@@ -192,14 +256,14 @@ def compute_intralayer_interactions(data, dist_matrix, src_idx: int,
     interaction_matrix.fill_diagonal_(0)
     
     # Get non-zero positions and values
-    nonzero_positions = torch.nonzero(interaction_matrix, as_tuple=False)
+    nonzero_positions = torch.nonzero(interaction_matrix, as_tuple=False).to(torch.int16)
     
     # Handle empty case
     if nonzero_positions.numel() == 0:
-        return torch.empty((4, 0), dtype=torch.long), torch.empty(0, dtype=torch.float32)
+        return torch.empty((4, 0), dtype=torch.long), torch.empty(0, dtype=torch.int16)
     
     # Extract values for non-zero positions
-    nonzero_values = interaction_matrix[nonzero_positions[:, 0], nonzero_positions[:, 1]]
+    nonzero_values = interaction_matrix[nonzero_positions[:, 0].to(torch.long), nonzero_positions[:, 1].to(torch.long)]
     
     # Create 4D indices [i, alpha, j, alpha]
     i_indices = nonzero_positions[:, 0]
@@ -214,7 +278,7 @@ def compute_intralayer_interactions(data, dist_matrix, src_idx: int,
     
     return layer_indices, nonzero_values
 
-def compute_interlayer_interactions(data, dist_matrix, src_layer: int, dst_layer: int, src_info: Dict[str, List[int]], dst_info: Dict[str, List[int]], toll_complex: float) -> Tuple[torch.Tensor, torch.Tensor]:
+def compute_interlayer_interactions(data, dist_matrix, src_layer: int, dst_layer: int, src_info: Dict[str, List[int]], dst_info: Dict[str, List[int]], toll_complex: float) -> Tuple[torch.ShortTensor, torch.FloatTensor]:
     """
     Compute interlayer interactions between two layers.
     Handles all cases of nonzero positions (0-d tensor, 1-d tensor, or 2-d tensor).
@@ -242,12 +306,12 @@ def compute_interlayer_interactions(data, dist_matrix, src_layer: int, dst_layer
     diagonal_values = receptor_vals * ligand_vals
     
     # Get nonzero positions, handling all possible cases
-    raw_nonzero = torch.nonzero(diagonal_values, as_tuple=False)
+    raw_nonzero = torch.nonzero(diagonal_values, as_tuple=False).to(torch.int16)
     
     # Handle empty case
     if raw_nonzero.numel() == 0:
-        print(f"No interactions found for src_layer {src_layer} and dst_layer {dst_layer}")
-        return torch.empty((4, 0), dtype=torch.long), torch.empty(0, dtype=torch.float32)
+        #print(f"No interactions found for src_layer {src_layer} and dst_layer {dst_layer}")
+        return torch.empty((4, 0), dtype=torch.long), torch.empty(0, dtype=torch.int16)
     
     # Convert to 1D tensor regardless of input dimensionality
     if raw_nonzero.dim() == 0:
@@ -261,7 +325,7 @@ def compute_interlayer_interactions(data, dist_matrix, src_layer: int, dst_layer
         nonzero_positions = raw_nonzero.view(-1)
     
     # Get values for nonzero positions
-    nonzero_values = diagonal_values[nonzero_positions]
+    nonzero_values = diagonal_values[nonzero_positions.to(torch.long)]
     
     # Create indices for the sparse tensor
     i_indices = nonzero_positions

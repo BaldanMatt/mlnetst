@@ -108,6 +108,14 @@ def parse_arguments() -> argparse.Namespace:
     )
     
     parser.add_argument(
+        "--resource", "-r", 
+        type=str, 
+        default="nichenet",
+        choices=["nichenet", "mouseconsensus"],
+        help="Resource to use for ligand-receptor interactions"
+    )
+    
+    parser.add_argument(
         "--verbose", "-v", 
         type=int, 
         default=0, 
@@ -133,6 +141,20 @@ def parse_arguments() -> argparse.Namespace:
         type=Path, 
         default=DEFAULT_DATA_PATH,
         help="Path to the input AnnData file"
+    )
+    
+    parser.add_argument(
+        "--force", 
+        action="store_true", 
+        default=False,
+        help="Force overwrite of existing multilayer network file"
+    )
+    
+    parser.add_argument(
+        "--num_threads",
+        type=int,
+        default=1,
+        help="Number of threads to use for parallel processing"
     )
     
     return parser.parse_args()
@@ -276,8 +298,11 @@ def build_multilayer_network(
     subdata: anndata.AnnData,
     cell_indexes: List[str],
     lr_interactions: pd.DataFrame,
+    resource: str,
     mode: str,
-    logger: logging.Logger
+    logger: logging.Logger,
+    verbose: int = 1,
+    num_threads: int = 1
 ) -> object:
     """
     Build the multilayer network.
@@ -301,7 +326,7 @@ def build_multilayer_network(
         for source, target in zip(lr_interactions["source"], lr_interactions["target"])
     ]
     for i, desc in enumerate(layer_descriptions, 1):
-        logger.info(f"  Layer {i}: {desc}")
+        logger.debug(f"  Layer {i}: {desc}")
     
     # Compute memory usage estimate
     num_cells = len(cell_indexes)
@@ -309,13 +334,17 @@ def build_multilayer_network(
     compute_tensor_memory_usage(num_cells, num_layers)
     
     # Create network-building logger with DEBUG level
-    network_logger = get_colored_logger("NETWORK_BUILD", level=logging.DEBUG, mode="debug")
+    if verbose >= 1:
+        network_logger = get_colored_logger("NETWORK_BUILD", level=logging.DEBUG, mode="debug")
+    else:
+        network_logger = get_colored_logger("NETWORK_BUILD", level=logging.INFO, mode="info")
     
-    logger.info(f"Assembling multilayer network with {num_cells} cells and {num_layers} layers")
+    logger.info(f"Assembling multilayer network with {num_cells} cells and potentially {num_layers} layers")
     
     mlnet = assemble_multilayer_network(
         data=network_data,
         lr_db=lr_interactions,
+        resource=resource,
         batch_size=None,
         toll_complexes=1e-6,
         toll_distance=1e-6,
@@ -323,7 +352,7 @@ def build_multilayer_network(
         build_inter=True,
         logger=network_logger,
         mode=mode,
-        n_jobs=1,
+        n_jobs=num_threads,
     )
     
     logger.info("Successfully built multilayer network")
@@ -346,60 +375,137 @@ def main() -> None:
     logger.info("Starting multilayer network construction")
     logger.info(f"Parameters: N={args.num_cells}, L={args.num_layers}, mode={args.mode}")
     
-    try:
-        # Load and filter data
-        subdata = load_and_filter_data(
-            args.data_path, 
-            args.source_cell_type, 
-            args.target_cell_type,
-            logger
-        )
-        
-        # Sample cells
+    # Load and filter data
+    subdata = load_and_filter_data(
+        args.data_path, 
+        args.source_cell_type, 
+        args.target_cell_type,
+        logger
+    )
+    
+    # Filter ligand-receptor interactions
+    lr_interactions = filter_lr_interactions(subdata, args.num_layers, logger)
+    
+    subdata.X[subdata.X < 25] = 0
+    # Let's do some quality control over subdata
+    import scanpy as sc
+    logger.info("Performing quality control on the subset of data")
+    sc.pp.calculate_qc_metrics(subdata, inplace=True)
+    logger.info(f"Subset info:\n{subdata.obs.info()}")
+    sc.pl.violin(subdata, ["n_genes_by_counts", "log1p_n_genes_by_counts", "total_counts", "log1p_total_counts", "pct_counts_in_top_50_genes"],
+                jitter=0.4, multi_panel=True, show=True) if args.verbose >= 1 else None
+    
+    sc.pp.filter_cells(subdata, min_genes=100)
+    sc.pp.filter_genes(subdata, min_cells=3)
+    
+    logger.info("Performing quality control on the subset of data after filtering")
+    sc.pp.calculate_qc_metrics(subdata, inplace=True)
+    logger.info(f"Subset info:\n{subdata.obs.info()}")
+    sc.pl.violin(subdata, ["n_genes_by_counts", "log1p_n_genes_by_counts", "total_counts", "log1p_total_counts", "pct_counts_in_top_50_genes"],
+                jitter=0.4, multi_panel=True, show=True) if args.verbose >= 1 else None
+    
+    # Sample cells
+    if args.num_cells >= len(subdata.obs_names):
+        logger.warning(f"Requested {args.num_cells} cells but only {len(subdata.obs_names)} available. Using all cells.")
+        cell_indexes = subdata.obs_names.tolist()
+    else:
         cell_indexes = sample_cells(subdata, args.num_cells, logger)
-        
-        # Filter ligand-receptor interactions
-        lr_interactions = filter_lr_interactions(subdata, args.num_layers, logger)
-        
-        # Build multilayer network
-        mlnet = build_multilayer_network(
-            subdata, 
-            cell_indexes, 
-            lr_interactions, 
-            args.mode, 
-            logger
-        )
-        
-        logger.info("✅ Multilayer network construction completed successfully")
-        
-        # TODO: Add network analysis, saving, or visualization here
-        
-    except Exception as e:
-        logger.error(f"❌ Error during execution: {str(e)}")
-        logger.debug("Full traceback:", exc_info=True)
-        sys.exit(1)
+
+    if (Path(__file__).parents[1] / "data" / "processed" / "mlnet.pth").exists() and args.force is False:
+        logger.info("Multilayer network already exists. Use --force to overwrite.")
+        mlnet = torch.load(Path(__file__).parents[1] / "data" / "processed" / "mlnet.pth")
+    else:
+        try:
+            # Build multilayer network
+            mlnet = build_multilayer_network(
+                subdata, 
+                cell_indexes, 
+                lr_interactions,
+                args.resource,
+                args.mode, 
+                logger,
+                args.verbose,
+                num_threads=args.num_threads
+            )
+            
+            logger.info("✅ Multilayer network construction completed successfully")
+            
+            # TODO: Add network analysis, saving, or visualization here
+            
+        except Exception as e:
+            logger.error(f"❌ Error during execution: {str(e)}")
+            logger.debug("Full traceback:", exc_info=True)
+            sys.exit(1)
+            
+        torch.save(mlnet, Path(__file__).parents[1] / "data" / "processed" / "mlnet.pth")
 
     # Compute degree of the network
     supra_adjacency_matrix = build_supra_adjacency_matrix_from_tensor(mlnet)
     in_strength_distribution = compute_instrength(supra_adjacency_matrix, args.num_cells, args.num_layers)
-
+    in_degree_distribution = compute_indegree(supra_adjacency_matrix, args.num_cells, args.num_layers)
+    df_to_plot = pd.DataFrame({"value": in_strength_distribution.cpu().numpy(), "metric": "instrength"})
+    df_to_plot = pd.concat([df_to_plot, pd.DataFrame({"value": in_degree_distribution.cpu().numpy(), "metric": "indegree"})], ignore_index=True)
+    
     import seaborn as sns
     import matplotlib.pyplot as plt
-    fig = plt.figure(figsize=(10, 6))
-    sns.histplot(in_strength_distribution.cpu().numpy(), bins=30, kde=True)
-    plt.title("Instrength Distribution")
-    plt.xlabel("Instrength")
-    plt.ylabel("Frequency")
+    sns.catplot(df_to_plot, x="value", kind="violin", col="metric")
     plt.show()
     
-    print(subdata.obs_names)
     import networkx as nx
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+
+    # Create graph
     g = nx.Graph()
-    nodes_dict = {i: {"x": subdata.obs.loc[i,"centroid_x"], "y": subdata.obs.loc[i,"centroid_y"], "instrength": in_strength_distribution[counter]} for counter, i in enumerate(cell_indexes)}
+    nodes_dict = {
+        i: {
+            "x": subdata.obs.loc[i, "centroid_x"], 
+            "y": subdata.obs.loc[i, "centroid_y"],
+            "instrength": float(in_strength_distribution[counter]),  # Convert to float
+            "indegree": float(in_degree_distribution[counter])      # Convert to float
+        } for counter, i in enumerate(cell_indexes)
+    }
     g.add_nodes_from(nodes_dict.items())
+
+    # Create figure
+    fig, axs = plt.subplots(1, 2, figsize=(15, 7))
     pos = {i: (nodes_dict[i]["x"], nodes_dict[i]["y"]) for i in nodes_dict}
-    nx.draw(g, pos, node_size=10, with_labels=False, 
-            node_color=[nodes_dict[i]["instrength"] for i in nodes_dict], cmap=plt.cm.viridis)
+
+    # Get color values
+    instrength_values = [nodes_dict[i]["instrength"] for i in nodes_dict]
+    indegree_values = [nodes_dict[i]["indegree"] for i in nodes_dict]
+
+    # Create normalizers for each metric
+    instrength_norm = Normalize(vmin=min(instrength_values), vmax=max(instrength_values))
+    indegree_norm = Normalize(vmin=min(indegree_values), vmax=max(indegree_values))
+
+    # Plot instrength
+    sc0 = nx.draw(g, pos, node_size=50, with_labels=False, 
+            node_color=instrength_values, 
+            cmap=plt.cm.viridis, 
+            node_cmap=plt.cm.viridis,
+            ax=axs[0],
+            norm=instrength_norm)
+    axs[0].set_title("In-strength colored nodes in space")
+    plt.colorbar(plt.cm.ScalarMappable(norm=instrength_norm, cmap=plt.cm.viridis), 
+                ax=axs[0], label='In-strength')
+
+    # Plot indegree
+    sc1 = nx.draw(g, pos, node_size=50, with_labels=False, 
+            node_color=indegree_values, 
+            cmap=plt.cm.viridis, 
+            node_cmap=plt.cm.viridis,
+            ax=axs[1],
+            norm=indegree_norm)
+    axs[1].set_title("In-degree colored nodes in space")
+    plt.colorbar(plt.cm.ScalarMappable(norm=indegree_norm, cmap=plt.cm.viridis), 
+                ax=axs[1], label='In-degree')
+
+    # Add some debug info
+    print(f"In-strength range: [{min(instrength_values):.2f}, {max(instrength_values):.2f}]")
+    print(f"In-degree range: [{min(indegree_values):.2f}, {max(indegree_values):.2f}]")
+
+    plt.tight_layout()
     plt.show()
 
 if __name__ == "__main__":
