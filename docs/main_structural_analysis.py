@@ -456,56 +456,90 @@ def main() -> None:
     from matplotlib.colors import Normalize
 
     # Create graph
+    # Your existing graph setup
     g = nx.Graph()
     nodes_dict = {
         i: {
-            "x": subdata.obs.loc[i, "centroid_x"], 
+            "x": subdata.obs.loc[i, "centroid_x"],
             "y": subdata.obs.loc[i, "centroid_y"],
-            "instrength": float(in_strength_distribution[counter]),  # Convert to float
-            "indegree": float(in_degree_distribution[counter])      # Convert to float
+            "instrength": float(in_strength_distribution[counter]),
+            "indegree": float(in_degree_distribution[counter])
         } for counter, i in enumerate(cell_indexes)
     }
     g.add_nodes_from(nodes_dict.items())
 
     # Create figure
-    fig, axs = plt.subplots(1, 2, figsize=(15, 7))
+    fig, axs = plt.subplots(1, 3, figsize=(20, 6))
     pos = {i: (nodes_dict[i]["x"], nodes_dict[i]["y"]) for i in nodes_dict}
 
     # Get color values
     instrength_values = [nodes_dict[i]["instrength"] for i in nodes_dict]
     indegree_values = [nodes_dict[i]["indegree"] for i in nodes_dict]
 
-    # Create normalizers for each metric
+    # Print some statistics to check if values are actually different
+    print("In-strength stats:")
+    print(f"  Min: {min(instrength_values):.3f}, Max: {max(instrength_values):.3f}")
+    print(f"  Mean: {np.mean(instrength_values):.3f}, Std: {np.std(instrength_values):.3f}")
+
+    print("In-degree stats:")
+    print(f"  Min: {min(indegree_values):.3f}, Max: {max(indegree_values):.3f}")
+    print(f"  Mean: {np.mean(indegree_values):.3f}, Std: {np.std(indegree_values):.3f}")
+
+    # Create normalizers - use same normalization range for better comparison
+    global_min = min(min(instrength_values), min(indegree_values))
+    global_max = max(max(instrength_values), max(indegree_values))
+    global_norm = Normalize(vmin=global_min, vmax=global_max)
+
+    # Individual normalizers (for separate color scales)
     instrength_norm = Normalize(vmin=min(instrength_values), vmax=max(instrength_values))
     indegree_norm = Normalize(vmin=min(indegree_values), vmax=max(indegree_values))
 
-    # Plot instrength
-    sc0 = nx.draw(g, pos, node_size=50, with_labels=False, 
-            node_color=instrength_values, 
-            cmap=plt.cm.viridis, 
-            node_cmap=plt.cm.viridis,
-            ax=axs[0],
-            norm=instrength_norm)
-    axs[0].set_title("In-strength colored nodes in space")
-    plt.colorbar(plt.cm.ScalarMappable(norm=instrength_norm, cmap=plt.cm.viridis), 
+    # Plot 1: In-strength with individual normalization
+    nx.draw(g, pos, node_size=5, with_labels=False,
+            node_color=instrength_values,
+            cmap=plt.cm.viridis,
+            ax=axs[0])
+    axs[0].set_title("In-strength (individual scale)")
+    plt.colorbar(plt.cm.ScalarMappable(norm=instrength_norm, cmap=plt.cm.viridis),
                 ax=axs[0], label='In-strength')
 
-    # Plot indegree
-    sc1 = nx.draw(g, pos, node_size=50, with_labels=False, 
-            node_color=indegree_values, 
-            cmap=plt.cm.viridis, 
-            node_cmap=plt.cm.viridis,
-            ax=axs[1],
-            norm=indegree_norm)
-    axs[1].set_title("In-degree colored nodes in space")
-    plt.colorbar(plt.cm.ScalarMappable(norm=indegree_norm, cmap=plt.cm.viridis), 
+    # Plot 2: In-degree with individual normalization  
+    nx.draw(g, pos, node_size=5, with_labels=False,
+            node_color=indegree_values,
+            cmap=plt.cm.viridis,
+            ax=axs[1])
+    axs[1].set_title("In-degree (individual scale)")
+    plt.colorbar(plt.cm.ScalarMappable(norm=indegree_norm, cmap=plt.cm.viridis),
                 ax=axs[1], label='In-degree')
 
-    # Add some debug info
-    print(f"In-strength range: [{min(instrength_values):.2f}, {max(instrength_values):.2f}]")
-    print(f"In-degree range: [{min(indegree_values):.2f}, {max(indegree_values):.2f}]")
+    # Plot 3: Side-by-side with same color scale for direct comparison
+    # Use global normalization so colors are directly comparable
+    nx.draw(g, pos, node_size=50, with_labels=False,
+            node_color=instrength_values,
+            cmap=plt.cm.viridis,
+            ax=axs[2])
+    # Overlay with different marker for indegree (optional)
+    scatter = axs[2].scatter([pos[i][0] for i in nodes_dict], 
+                            [pos[i][1] for i in nodes_dict],
+                            c=indegree_values, cmap=plt.cm.plasma, 
+                            s=20, alpha=0.7, marker='s')
+    axs[2].set_title("In-strength (viridis) vs In-degree (plasma)")
+    plt.colorbar(plt.cm.ScalarMappable(norm=global_norm, cmap=plt.cm.viridis),
+                ax=axs[2], label='Values (global scale)')
 
     plt.tight_layout()
+    plt.show()
+
+    # Calculate correlation to check if they're actually similar
+    correlation = np.corrcoef(instrength_values, indegree_values)[0, 1]
+    print(f"\nCorrelation between in-strength and in-degree: {correlation:.3f}")
+
+    # Create a scatter plot to visualize the relationship
+    plt.figure(figsize=(8, 6))
+    plt.scatter(instrength_values, indegree_values, alpha=0.6)
+    plt.xlabel('In-strength')
+    plt.ylabel('In-degree')
+    plt.title(f'In-strength vs In-degree (correlation: {correlation:.3f})')
     plt.show()
 
 if __name__ == "__main__":
