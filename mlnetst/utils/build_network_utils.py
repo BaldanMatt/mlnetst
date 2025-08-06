@@ -5,12 +5,15 @@ import pandas as pd
 import networkx as nx
 import logging
 from mlnetst.core.knowledge.networks import load_resource
+from sklearn.preprocessing import MinMaxScaler
 
 def create_layer_gene_mapping(ligand_ids: List[str],
                               receptor_ids: List[str],
                               var_names: List[str],
                               resource: str = "nichenet",
                               inter_coupling: str = "rtl",
+                              th_sparsify_weight_resource: float = 0.05,
+                              th_sparsify_degree_resource: float = 0.05,
                               logger: logging.Logger | None = None) -> Dict[int, Dict[str, Dict[str, List[int]]]]:
     """
     Create a unified mapping between layer indices and both ligand and receptor components.
@@ -74,7 +77,7 @@ def create_layer_gene_mapping(ligand_ids: List[str],
                 "gene_id": receptor_id,
                 "component_indices": receptor_indices
             }
-            layer_info["layer_name"] = f"{ligand_id}_{receptor_id}"
+            layer_info["layer_name"] = f"{ligand_id}&{receptor_id}"
             layer_info["inter_pairs"] = []  # Initialize empty list for inter-layer pairs
             layer_map[layer_idx] = layer_info
 
@@ -84,12 +87,27 @@ def create_layer_gene_mapping(ligand_ids: List[str],
         logger.info("Creating inter-layer pairs for rtl coupling") if logger else None
         net_df = load_resource(resource)
         net_df[["source", "target"]] = net_df[["source", "target"]].apply(lambda x: x.str.lower())
+        logger.debug(f"Loaded network with {len(net_df)} interactions\n\tWith grouped by provenance sizes of {net_df['provenance'].value_counts()}") if logger else None
+        net_df = net_df.query("provenance == 'nichenet_gr'")
+        logger.info(f"Filtered network to {len(net_df)} interactions") if logger else None
+        scaler = MinMaxScaler()
+        net_df["weight_minmax"] = scaler.fit_transform(net_df[["weight"]])
+        net_df = net_df.query("weight_minmax >= @th_sparsify_weight_resource")
+        logger.info(f"Filtered network to {len(net_df)} interactions") if logger else None
+        net_df = net_df.query("source != 'ctcf' and target != 'ctcf'")
+        logger.info(f"Filtered network to {len(net_df)} interactions") if logger else None
         net = nx.from_pandas_edgelist(
             net_df,
             source='source',
             target='target',
             create_using=nx.DiGraph
         )
+        degree_sequence = list(net.degree)
+        minmax_degree = scaler.fit_transform(np.array(degree_sequence)[:, 1].reshape(-1, 1)).flatten()
+        nodes_to_remove = [n for n,d in zip(net.nodes(), minmax_degree) if d >= th_sparsify_degree_resource]
+        net.remove_nodes_from(nodes_to_remove)
+        logger.debug(f"Network after sparsification has {net.number_of_nodes()} nodes and {net.number_of_edges()} edges") if logger else None
+        
         logger.debug(f"Resource GRN/LRT network loaded with {net.number_of_nodes()} nodes and {net.number_of_edges()} edges")
         completed_layers = 0
         inter_layers_pairs_number = 0
@@ -98,7 +116,11 @@ def create_layer_gene_mapping(ligand_ids: List[str],
             # Get source receptor components
             source_receptor = src_info["receptor"]["gene_id"]
             source_components = source_receptor.split("_")
-            
+            if logger:
+                src_descendants = {src: set(nx.descendants(net, src)) for src in source_components}
+                length_of_descendants = [len(descendants) for descendants in src_descendants.values()]
+                logger.debug(f"Checking descendancy for source components: {source_components}\n\t \
+                Length of descendants list (length of list is number of source components): {length_of_descendants}")
             for dst_layer, dst_info in layer_map.items():
                 if src_layer == dst_layer:
                     continue  # Skip self-loops
@@ -108,11 +130,11 @@ def create_layer_gene_mapping(ligand_ids: List[str],
                 target_components = target_ligand.split("_")
                 
                 # Check if all components satisfy the descendancy condition
-                logger.debug(f"Checking descendancy for source receptor: {source_components} and target ligand: {target_components}") if logger else None
-                if check_complex_descendancy(net, source_components, target_components):
-                    logger.debug(f"Adding inter-layer pair: {src_layer} -> {dst_layer} for source receptor: {source_receptor} and target ligand: {target_ligand}")
+                if check_complex_descendancy(net, source_components, target_components, logger):
+                    #logger.debug(f"Adding inter-layer pair: {src_layer} -> {dst_layer} for source receptor: {source_receptor} and target ligand: {target_ligand}")
                     layer_map[src_layer]["inter_pairs"].append(dst_layer)
                     inter_layers_pairs_number += 1
+            logger.debug(f"Processed layer {src_layer} with {len(layer_map[src_layer]['inter_pairs'])} inter-layer pairs") if logger else None
             completed_layers += 1
             if logger and (completed_layers % max(1, num_layers // 10) == 0):
                 logger.info(f"Processed {completed_layers}/{num_layers} layers for inter-layer pairs")
@@ -171,7 +193,7 @@ def extract_suitable_layers_from_net(net: nx.DiGraph, ligand_ids: List[str], rec
     return pairs
 
 def check_complex_descendancy(net: nx.DiGraph, source_components: List[str], 
-                            target_components: List[str]) -> bool:
+                            target_components: List[str], logger: logging.Logger | None = None) -> bool:
     """
     Check if all source components have all target components in their descendancy.
     
@@ -184,11 +206,14 @@ def check_complex_descendancy(net: nx.DiGraph, source_components: List[str],
         bool: True if all components satisfy the descendancy condition
     """
     # For each source component, get its descendants once
+    if any([True for src in source_components if src not in net.nodes()]):
+        return False  # If any source component is not in the network, return False
+        
     source_descendants = {
         src: set(nx.descendants(net, src)) 
         for src in source_components
     }
-    
+        
     # Check if all source components can reach all target components
     return all(
         all(target in descendants 

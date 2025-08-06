@@ -235,6 +235,7 @@ def compute_multi_indegree(supra_adjacency_matrix: torch.Tensor, n:int, l: int) 
         Tensor of shape (N,) containing multi-indegrees
     """
     # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
     indices = supra_adjacency_matrix.indices()
     values = supra_adjacency_matrix.values()
     
@@ -270,6 +271,7 @@ def compute_multi_instrength(supra_adjacency_matrix: torch.Tensor, n: int, l: in
         Tensor of shape (N*L,) containing multi-instrengths
     """
     # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
     indices = supra_adjacency_matrix.indices()
     values = supra_adjacency_matrix.values()
     
@@ -302,6 +304,7 @@ def compute_multi_outdegree(supra_adjacency_matrix, n, l):
         torch.Tensor: A tensor of shape (N,) containing multi-outdegrees.
     """
     # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
     indices = supra_adjacency_matrix.indices()
     values = supra_adjacency_matrix.values()
     
@@ -337,6 +340,7 @@ def compute_multi_outstrength(supra_adjacency_matrix, n, l):
         torch.Tensor: A tensor of shape (N * L,) containing multi-outstrengths.
     """
     # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
     indices = supra_adjacency_matrix.indices()
     values = supra_adjacency_matrix.values()
     

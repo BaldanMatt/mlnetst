@@ -49,8 +49,11 @@ from mlnetst.utils.mlnet_metrics_utils import (
     compute_indegree,
     compute_instrength,
     compute_outdegree,
+    compute_outstrength,
     compute_multi_indegree,
     compute_multi_outdegree,
+    compute_multi_instrength,
+    compute_multi_outstrength,
     compute_total_degree,
     compute_average_global_clustering
 )
@@ -122,7 +125,8 @@ class NetworkAnalyzer:
                             subdata: anndata.AnnData,
                             cell_indexes: List[str],
                             in_strength: torch.Tensor,
-                            in_degree: torch.Tensor) -> List[Path]:
+                            in_degree: torch.Tensor,
+                            figname: str) -> List[Path]:
         """Create spatial network visualizations."""
         self.logger.info("Creating spatial network plots")
         
@@ -197,7 +201,7 @@ class NetworkAnalyzer:
         axs[1, 1].legend()
         
         plt.tight_layout()
-        spatial_path = self._save_figure("spatial_network_analysis")
+        spatial_path = self._save_figure(f"spatial_network_analysis_{figname}")
         
         return [spatial_path]
         
@@ -360,7 +364,19 @@ def parse_arguments() -> argparse.Namespace:
         default=3,
         help="Minimum cells per gene for filtering"
     )
-    
+    parser.add_argument(
+        "--th_sparsify_weight_resource",
+        type=float,
+        default=0.05,
+        help="Threshold for sparsifying weight interactions"
+    )
+    parser.add_argument(
+        "--th_sparsify_degree_resource",
+        type=float,
+        default=0.05,
+        help="Threshold for sparsifying degree interactions"
+    )
+
     return parser.parse_args()
 
 
@@ -529,6 +545,8 @@ def build_multilayer_network(
             var_names=subdata.var_names,
             resource=args.resource_grn,
             inter_coupling=args.inter_coupling,
+            th_sparsify_weight_resource=args.th_sparsify_weight_resource,
+            th_sparsify_degree_resource=args.th_sparsify_degree_resource,
             logger=mapping_logger
         )
         mapping_logger.info(f"✅ Created mapping for {len(layer_mapping)} layers")
@@ -540,7 +558,6 @@ def build_multilayer_network(
     
     # Build network
     network_logger.debug(f"Layer mapping: {layer_mapping}")
-    input("Waiting for user input before building network...")
     network_logger.info("Assembling multilayer network")
     mlnet = assemble_multilayer_network(
         subdata[cell_indexes, :], 
@@ -572,10 +589,17 @@ def analyze_and_visualize_network(
     
     # Compute network metrics
     logger.info("Computing network metrics")
+    num_layers = mlnet.shape[1]
+    num_cells = mlnet.shape[0]
     supra_adjacency = build_supra_adjacency_matrix_from_tensor(mlnet)
-    in_strength = compute_instrength(supra_adjacency, args.num_cells, args.num_layers)
-    in_degree = compute_indegree(supra_adjacency, args.num_cells, args.num_layers)
-    
+    in_strength = compute_instrength(supra_adjacency, num_cells, num_layers)
+    multi_in_strength = compute_multi_instrength(supra_adjacency, num_cells, num_layers)
+    out_strength = compute_outstrength(supra_adjacency, num_cells, num_layers)
+    multi_out_strength = compute_multi_outstrength(supra_adjacency, num_cells, num_layers)
+    in_degree = compute_indegree(supra_adjacency, num_cells, num_layers)
+    multi_in_degree = compute_multi_indegree(supra_adjacency, num_cells, num_layers)
+    out_degree = compute_outdegree(supra_adjacency, num_cells, num_layers)
+    multi_out_degree = compute_multi_outdegree(supra_adjacency, num_cells, num_layers)
     logger.info("✅ Network metrics computed")
     
     # Create analyzer and generate plots
@@ -586,7 +610,10 @@ def analyze_and_visualize_network(
     logger.info(f"Created {len(dist_plots)} degree distribution plots")
     
     # Generate spatial network plots
-    spatial_plots = analyzer.plot_spatial_networks(subdata, cell_indexes, in_strength, in_degree)
+    spatial_plots = analyzer.plot_spatial_networks(subdata, cell_indexes, in_strength, in_degree, figname="in_strength_in_degree")
+    spatial_plots += analyzer.plot_spatial_networks(subdata, cell_indexes, multi_in_strength, multi_in_degree, figname="multi_in_strength_multi_in_degree")
+    spatial_plots += analyzer.plot_spatial_networks(subdata, cell_indexes, out_strength, out_degree, figname="out_strength_out_degree")
+    spatial_plots += analyzer.plot_spatial_networks(subdata, cell_indexes, multi_out_strength, multi_out_degree, figname="multi_out_strength_multi_out_degree")
     logger.info(f"Created {len(spatial_plots)} spatial network plots")
     
     logger.info("✅ Network analysis and visualization completed")
@@ -642,7 +669,6 @@ def main() -> None:
         )
         
         main_logger.info(f"Filtered ligand-receptor interactions: {len(lr_interactions)} valid interactions")
-        input("Waiting...")
         
         # Sample cells
         cell_indexes = sample_cells(subdata, args.num_cells, main_logger)
