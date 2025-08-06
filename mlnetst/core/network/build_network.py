@@ -12,12 +12,11 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 from typing import Any
 import logging
 
-def assemble_multilayer_network(data, lr_db, resource: str,
-                                batch_size: int | None = None,
+def assemble_multilayer_network(data, layer_map,
                                 toll_complexes: float = 1e-6, toll_distance: float = 1e-6,
                                 build_intra: bool =True, build_inter: bool =True,
                                 mode: str = "tensor",
-                                logger: Any | None = None, n_jobs:int = 1,
+                                logger: Any | None = None,
                                 ) -> Any:
 
     """
@@ -35,16 +34,7 @@ def assemble_multilayer_network(data, lr_db, resource: str,
         - torch.sparse.FloatTensor: Sparse tensor in COO format (N, L, N, L)
     """
     start_building_time = time.time()
-    # Determine number of threads for parallelization
-    if n_jobs == -1:
-        n_jobs = os.cpu_count()
-    elif n_jobs <= 0:
-        n_jobs = 1
 
-    # if n_jobs > 1:
-    #     logger.warning(f"Parallel processing is not working, fallback to sequential") if logger else None
-    #     n_jobs = 1
-    # Determine logger and verbose mode
     if logger is not None and isinstance(logger, logging.Logger):
         ...
     else:
@@ -52,24 +42,11 @@ def assemble_multilayer_network(data, lr_db, resource: str,
 
     # Prepare runtime variables
     num_observations = data.shape[0]
-    num_layers = lr_db.shape[0]
-    ligand_ids = lr_db["source"].str.lower().tolist()
-    receptor_ids = lr_db["target"].str.lower().tolist()
-    layer_map = create_layer_gene_mapping(ligand_ids, receptor_ids, data.var_names)
-    if logger:
-        logger.debug(f"Layer map created with {len(layer_map)} entries present in data.")
     num_layers = len(layer_map)
     
     # Init indices and values lists
     indices_list = []  # Will store [dim0, dim1, dim2, dim3] indices
     values_list = []  # Will store corresponding values
-    
-    
-    if build_inter:
-        # compute suitable pairs for interlayer interactions
-        logger.info("Selecting interlayer pairs for interactions...")
-        layer_pairs = select_inter_layers(lr_db, layer_map, resource=resource, inter_coupling="rtl", logger=logger)
-
 
     # Extract cell indexes
     cell_indexes = data.obs_names
@@ -88,47 +65,26 @@ def assemble_multilayer_network(data, lr_db, resource: str,
         intralayer_start = time.time()
         completed_layers = 0
         
-        #TODO: Possibly add module to select which layers to compute that outputs an iterable of indexes
-        if n_jobs == 1:
-            # Sequential processing
-            for alpha, layer_info in layer_map.items():
-                logger.debug(f"Computing intralayer interactions for layer {alpha} with l-r pair {layer_info['ligand']['gene_id']} -> {layer_info['receptor']['gene_id']}") if logger else None
-                layer_indexes, layer_values = compute_intralayer_interactions(
-                    data[cell_indexes, :], # data for selected cells
-                    dist_matrix, # distance matrix for selected cells
-                    alpha, # layer index
-                    layer_info, # layer information
-                    toll_complexes # tolerance for complex interactions
-                )
-                logger.debug(f"Layer {alpha} computed with {len(layer_values)} non-zero values.") if logger else None
-                if len(layer_values)>0:
-                    indices_list.append(layer_indexes)
-                    values_list.append(layer_values)
-                completed_layers += 1
-                if logger and (completed_layers % max(1, num_layers // 10) == 0 or completed_layers == num_layers):
-                    elapsed = time.time() - intralayer_start
-                    progress_pct = (completed_layers / num_layers) * 100
-                    eta = (elapsed / completed_layers) * (num_layers - completed_layers) if completed_layers < num_layers else 0
-                    logger.info(f"Intralayer progress {completed_layers}/{num_layers} layers: {progress_pct:.1f}%, ETA: {eta:.2f} s")
-        else:
-            with ProcessPoolExecutor(max_workers = n_jobs) as executor:
-            # Submit all layer computations
-                futures = {
-                        executor.submit(compute_intralayer_interactions, data[cell_indexes, :], dist_matrix, alpha, layer_info, toll_complexes): alpha
-                        for alpha, layer_info in layer_map.items()
-                        }
-                # Collect results as they complete
-                for future in as_completed(futures):
-                    layer_indices, layer_values = future.result()
-                    if len(layer_values)>0:
-                        indices_list.append(layer_indices)
-                        values_list.append(layer_values)
-                    completed_layers += 1
-                    if logger and (completed_layers % max(1, num_layers // 10) == 0 or completed_layers == num_layers):
-                        elapsed = time.time() - intralayer_start
-                        progress_pct = (completed_layers / num_layers) * 100
-                        eta = (elapsed / completed_layers) * (num_layers - completed_layers) if completed_layers < num_layers else 0
-                        logger.info(f"Intralayer progress: {completed_layers}/{num_layers} layers ({progress_pct:.1f}%) - ETA: {eta:.1f}s")
+
+        for alpha, layer_info in layer_map.items():
+            logger.debug(f"Computing intralayer interactions for layer {alpha} with l-r pair {layer_info['ligand']['gene_id']} -> {layer_info['receptor']['gene_id']}") if logger else None
+            layer_indexes, layer_values = compute_intralayer_interactions(
+                data[cell_indexes, :], # data for selected cells
+                dist_matrix, # distance matrix for selected cells
+                alpha, # layer index
+                layer_info, # layer information
+                toll_complexes # tolerance for complex interactions
+            )
+            logger.debug(f"Layer {alpha} computed with {len(layer_values)} non-zero values.") if logger else None
+            if len(layer_values)>0:
+                indices_list.append(layer_indexes)
+                values_list.append(layer_values)
+            completed_layers += 1
+            if logger and (completed_layers % max(1, num_layers // 10) == 0 or completed_layers == num_layers):
+                elapsed = time.time() - intralayer_start
+                progress_pct = (completed_layers / num_layers) * 100
+                eta = (elapsed / completed_layers) * (num_layers - completed_layers) if completed_layers < num_layers else 0
+                logger.info(f"Intralayer progress {completed_layers}/{num_layers} layers: {progress_pct:.1f}%, ETA: {eta:.2f} s")
         intralayer_time = time.time() - intralayer_start
         logger.info(f"All intralayer interactions computed in {intralayer_time:.2f} s")
     
@@ -137,52 +93,30 @@ def assemble_multilayer_network(data, lr_db, resource: str,
         if logger:
             logger.info("Computing interlayer interactions...")
         interlayer_start = time.time()
-        completed_pairs = 0
-        #layer_pairs = [(alpha, beta) for alpha in layer_map.keys() for beta in layer_map.keys() if alpha != beta]
+        completed_layers = 0
 
-        if n_jobs == 1:
-            # Sequential processing
-            for alpha, beta in layer_pairs:
+        for alpha, alpha_info in layer_map.items():
+            beta_layers = alpha_info["inter_pairs"]
+            for beta in beta_layers:
                 logger.debug(f"Computing interlayer interactions for layer pair ({alpha}, {beta}) with r_alpha-l_beta {layer_map[alpha]['receptor']['gene_id']} -> {layer_map[beta]['ligand']['gene_id']}") if logger else None
                 layer_indexes, layer_values = compute_interlayer_interactions(
                     data[cell_indexes, :], # data for selected cells
-                    dist_matrix, # distance matrix for selected cells
                     alpha, # source layer index
                     beta, # destination layer index
                     layer_map[alpha], # source layer information
                     layer_map[beta], # destination layer information
                     toll_complexes # tolerance for complex interactions
-                )
+                    )
                 logger.debug(f"Layer pair ({alpha}, {beta}) computed with {len(layer_values)} non-zero values.") if logger else None
                 if len(layer_values)>0:
                     indices_list.append(layer_indexes)
                     values_list.append(layer_values)
-                completed_pairs += 1
-                if logger and (completed_pairs % max(1, len(layer_pairs) // 10) == 0 or completed_pairs == len(layer_pairs)):
-                    elapsed = time.time() - interlayer_start
-                    progress_pct = (completed_pairs / len(layer_pairs)) * 100
-                    eta = (elapsed / completed_pairs) * (len(layer_pairs) - completed_pairs) if completed_pairs < len(layer_pairs) else 0
-                    logger.info(f"Interlayer progress {completed_pairs}/{len(layer_pairs)} pairs: {progress_pct:.1f}%, ETA: {eta:.2f} s")
-        else:
-            with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-                # Submit all layer pair computations
-                futures = {
-                        executor.submit(compute_interlayer_interactions, data[cell_indexes, :], dist_matrix, alpha, beta, toll_complexes): (alpha, beta)
-                        for alpha, beta in layer_pairs
-                        }
-                # Collect results as they complete
-                for future in as_completed(futures):
-                    layer_indices, layer_values = future.result()
-                    if len(layer_values)>0:
-                        indices_list.append(layer_indices)
-                        values_list.append(layer_values)
-                    completed_pairs += 1
-                    if logger and (completed_pairs % max(1, len(layer_pairs) // 10) == 0 or completed_pairs == len(layer_pairs)):
-                        elapsed = time.time() - interlayer_start
-                        progress_pct = (completed_pairs / len(layer_pairs)) * 100
-                        logger.info(f"Interlayer progress: {completed_pairs}/{len(layer_pairs)} pairs ({progress_pct:.1f}%) - ETA: {eta:.1f}s")
-                    if completed_pairs == len(layer_pairs):
-                        logger.info(f"All interlayer interactions computed in {elapsed:.2f} s")
+            completed_layers += 1
+            if logger and (completed_layers % max(1, len(layer_map) // 10) == 0 or completed_layers == len(layer_map)):
+                elapsed = time.time() - interlayer_start
+                progress_pct = (completed_layers / len(layer_map)) * 100
+                eta = (elapsed / completed_layers) * (len(layer_map) - completed_layers) if completed_layers < len(layer_map) else 0
+                logger.info(f"Interlayer progress {completed_layers}/{len(layer_map)} pairs: {progress_pct:.1f}%, ETA: {eta:.2f} s")
         interlayer_time = time.time() - interlayer_start
         logger.info(f"All interlayer interactions computed in {interlayer_time:.2f} s")
     

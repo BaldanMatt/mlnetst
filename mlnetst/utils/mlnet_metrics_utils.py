@@ -497,7 +497,7 @@ def compute_average_global_clustering(supra_adjacency_matrix: torch.Tensor, n: i
     # compute the trace of A*A*A
     num = torch.trace(supra_adjacency_matrix @ supra_adjacency_matrix @ supra_adjacency_matrix)
     # compute the trace of A*F*A
-    den = torch.trace(supra_adjacency_matrix @ supra_adjacency_matrix @ supra_adjacency_matrix)
+    den = torch.trace(supra_adjacency_matrix @ f_matrix @ supra_adjacency_matrix)
 
     return num / (torch.max(supra_adjacency_matrix) * den)
 

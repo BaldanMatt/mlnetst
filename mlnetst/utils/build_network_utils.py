@@ -6,7 +6,12 @@ import networkx as nx
 import logging
 from mlnetst.core.knowledge.networks import load_resource
 
-def create_layer_gene_mapping(ligand_ids: List[str], receptor_ids: List[str], var_names: List[str]) -> Dict[int, Dict[str, Dict[str, List[int]]]]:
+def create_layer_gene_mapping(ligand_ids: List[str],
+                              receptor_ids: List[str],
+                              var_names: List[str],
+                              resource: str = "nichenet",
+                              inter_coupling: str = "rtl",
+                              logger: logging.Logger | None = None) -> Dict[int, Dict[str, Dict[str, List[int]]]]:
     """
     Create a unified mapping between layer indices and both ligand and receptor components.
     
@@ -26,7 +31,8 @@ def create_layer_gene_mapping(ligand_ids: List[str], receptor_ids: List[str], va
                 "receptor": {
                     "gene_id": original receptor id,
                     "component_indices": list of indices in var_names for each component
-                }
+                },
+                "inter_pairs": [dst_layer_idx, ...]  it saves all the suitable pairs for this layer given resource
             }
         }
     """
@@ -69,8 +75,56 @@ def create_layer_gene_mapping(ligand_ids: List[str], receptor_ids: List[str], va
                 "component_indices": receptor_indices
             }
             layer_info["layer_name"] = f"{ligand_id}_{receptor_id}"
+            layer_info["inter_pairs"] = []  # Initialize empty list for inter-layer pairs
             layer_map[layer_idx] = layer_info
+
+    logger.debug(f"Created layer mapping {layer_map}\nwith {len(layer_map)} layers") if logger else None
+
+    if inter_coupling == "rtl":
+        logger.info("Creating inter-layer pairs for rtl coupling") if logger else None
+        net_df = load_resource(resource)
+        net_df[["source", "target"]] = net_df[["source", "target"]].apply(lambda x: x.str.lower())
+        net = nx.from_pandas_edgelist(
+            net_df,
+            source='source',
+            target='target',
+            create_using=nx.DiGraph
+        )
+        logger.debug(f"Resource GRN/LRT network loaded with {net.number_of_nodes()} nodes and {net.number_of_edges()} edges")
+        completed_layers = 0
+        inter_layers_pairs_number = 0
+        num_layers = len(layer_map)
+        for src_layer, src_info in layer_map.items():
+            # Get source receptor components
+            source_receptor = src_info["receptor"]["gene_id"]
+            source_components = source_receptor.split("_")
             
+            for dst_layer, dst_info in layer_map.items():
+                if src_layer == dst_layer:
+                    continue  # Skip self-loops
+                    
+                # Get target ligand components
+                target_ligand = dst_info["ligand"]["gene_id"]
+                target_components = target_ligand.split("_")
+                
+                # Check if all components satisfy the descendancy condition
+                logger.debug(f"Checking descendancy for source receptor: {source_components} and target ligand: {target_components}") if logger else None
+                if check_complex_descendancy(net, source_components, target_components):
+                    logger.debug(f"Adding inter-layer pair: {src_layer} -> {dst_layer} for source receptor: {source_receptor} and target ligand: {target_ligand}")
+                    layer_map[src_layer]["inter_pairs"].append(dst_layer)
+                    inter_layers_pairs_number += 1
+            completed_layers += 1
+            if logger and (completed_layers % max(1, num_layers // 10) == 0):
+                logger.info(f"Processed {completed_layers}/{num_layers} layers for inter-layer pairs")
+        logger.info(f"Inter-layer pairs: {inter_layers_pairs_number} pairs found")
+
+    elif inter_coupling == "combinatorial":
+        logger.info("Creating inter-layer pairs for combinatorial coupling") if logger else None
+        # For combinatorial coupling, we don't need to modify the layer_map, without itself
+        for layer_idx in layer_map:
+            layer_map[layer_idx]["inter_pairs"] = [l for l in layer_map.keys() if l != layer_idx]
+    else:
+        raise ValueError(f"Unknown inter_coupling type: {inter_coupling}. Supported types are 'rtl' and 'combinatorial'.")
     return layer_map
 
 def select_intra_layers(ligand_ids: List[str], var_names: List[str]) -> List[int]:
@@ -278,14 +332,13 @@ def compute_intralayer_interactions(data, dist_matrix, src_idx: int,
     
     return layer_indices, nonzero_values
 
-def compute_interlayer_interactions(data, dist_matrix, src_layer: int, dst_layer: int, src_info: Dict[str, List[int]], dst_info: Dict[str, List[int]], toll_complex: float) -> Tuple[torch.ShortTensor, torch.FloatTensor]:
+def compute_interlayer_interactions(data, src_layer: int, dst_layer: int, src_info: Dict[str, List[int]], dst_info: Dict[str, List[int]], toll_complex: float) -> Tuple[torch.ShortTensor, torch.FloatTensor]:
     """
     Compute interlayer interactions between two layers.
     Handles all cases of nonzero positions (0-d tensor, 1-d tensor, or 2-d tensor).
     
     Args:
         data: Expression data
-        dist_matrix: Distance matrix between cells
         src_layer: Source layer index
         dst_layer: Destination layer index
         src_info: Source layer gene information
