@@ -282,15 +282,12 @@ def filter_lr_interactions(
     logger.info(f"Found {len(filtered_df)} valid interactions after filtering")
     
     if len(filtered_df) < num_layers:
-        raise ValueError(
-            f"Not enough valid interactions found. "
-            f"Required: {num_layers}, Available: {len(filtered_df)}"
-        )
-    
-    # Sample required number of interactions
-    sample_lr = filtered_df.sample(n=num_layers, random_state=RANDOM_STATE).reset_index(drop=True)
+        logger.warning(f"Requested {num_layers} layers but only {len(filtered_df)} valid interactions available. Sampling from available interactions.")
+        return filtered_df
+    else:
+        # Sample required number of interactions
+        sample_lr = filtered_df.sample(n=num_layers, random_state=RANDOM_STATE).reset_index(drop=True)
     logger.info(f"Sampled {len(sample_lr)} interactions for network layers")
-    
     return sample_lr
 
 
@@ -341,7 +338,7 @@ def build_multilayer_network(
     
     logger.info(f"Assembling multilayer network with {num_cells} cells and potentially {num_layers} layers")
     
-    mlnet = assemble_multilayer_network(
+    mlnet, layer_mapping = assemble_multilayer_network(
         data=network_data,
         lr_db=lr_interactions,
         resource=resource,
@@ -411,13 +408,13 @@ def main() -> None:
     else:
         cell_indexes = sample_cells(subdata, args.num_cells, logger)
 
-    if (Path(__file__).parents[1] / "data" / "processed" / "mlnet.pth").exists() and args.force is False:
+    if (Path(__file__).parents[1] / "data" / "processed" / "experiment_mlnet.pth").exists() and args.force is False:
         logger.info("Multilayer network already exists. Use --force to overwrite.")
-        mlnet = torch.load(Path(__file__).parents[1] / "data" / "processed" / "mlnet.pth")
+        mlnet = torch.load(Path(__file__).parents[1] / "data" / "processed" / "experiment_mlnet.pth")
     else:
         try:
             # Build multilayer network
-            mlnet = build_multilayer_network(
+            mlnet, layer_mapping = build_multilayer_network(
                 subdata, 
                 cell_indexes, 
                 lr_interactions,
@@ -437,7 +434,12 @@ def main() -> None:
             logger.debug("Full traceback:", exc_info=True)
             sys.exit(1)
             
-        torch.save(mlnet, Path(__file__).parents[1] / "data" / "processed" / "mlnet.pth")
+        torch.save(mlnet, Path(__file__).parents[1] / "data" / "processed" / "experiment_mlnet.pth")
+        # save layer_mapping, which is a dictionary
+        pd.DataFrame.from_dict(layer_mapping, orient="index").to_csv(
+            Path(__file__).parents[1] / "data" / "processed" / "experiment_layer_mapping.csv"
+        )
+        logger.info("Multilayer network saved to disk")
 
     # Compute degree of the network
     supra_adjacency_matrix = build_supra_adjacency_matrix_from_tensor(mlnet)
