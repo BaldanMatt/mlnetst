@@ -280,6 +280,8 @@ def compute_multi_instrength(supra_adjacency_matrix: torch.Tensor, n: int, l: in
     
     # Filter indices and values
     non_diagonal_indices = indices[:, non_diagonal_mask]
+    
+    #TODO #diagonal_indices = indices[:, ~non_diagonal_mask]
     non_diagonal_values = values[non_diagonal_mask]
     
     # Compute node indices within layers

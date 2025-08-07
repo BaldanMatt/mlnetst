@@ -11,6 +11,7 @@ def create_layer_gene_mapping(ligand_ids: List[str],
                               receptor_ids: List[str],
                               var_names: List[str],
                               resource: str = "nichenet",
+                              resource_extra_params: Dict[str, Any] = {},
                               inter_coupling: str = "rtl",
                               th_sparsify_weight_resource: float = 0.05,
                               th_sparsify_degree_resource: float = 0.05,
@@ -85,11 +86,8 @@ def create_layer_gene_mapping(ligand_ids: List[str],
 
     if inter_coupling == "rtl":
         logger.info("Creating inter-layer pairs for rtl coupling") if logger else None
-        net_df = load_resource(resource)
+        net_df = load_resource(resource, extra_params=resource_extra_params)
         net_df[["source", "target"]] = net_df[["source", "target"]].apply(lambda x: x.str.lower())
-        logger.debug(f"Loaded network with {len(net_df)} interactions\n\tWith grouped by provenance sizes of {net_df['provenance'].value_counts()}") if logger else None
-        net_df = net_df.query("provenance == 'nichenet_gr'")
-        logger.info(f"Filtered network to {len(net_df)} interactions") if logger else None
         scaler = MinMaxScaler()
         net_df["weight_minmax"] = scaler.fit_transform(net_df[["weight"]])
         net_df = net_df.query("weight_minmax >= @th_sparsify_weight_resource")
@@ -116,11 +114,11 @@ def create_layer_gene_mapping(ligand_ids: List[str],
             # Get source receptor components
             source_receptor = src_info["receptor"]["gene_id"]
             source_components = source_receptor.split("_")
-            if logger:
-                src_descendants = {src: set(nx.descendants(net, src)) for src in source_components}
-                length_of_descendants = [len(descendants) for descendants in src_descendants.values()]
-                logger.debug(f"Checking descendancy for source components: {source_components}\n\t \
-                Length of descendants list (length of list is number of source components): {length_of_descendants}")
+            # if logger:
+            #     src_descendants = {src: set(nx.descendants(net, src)) for src in source_components}
+            #     length_of_descendants = [len(descendants) for descendants in src_descendants.values()]
+            #     logger.debug(f"Checking descendancy for source components: {source_components}\n\t \
+            #     Length of descendants list (length of list is number of source components): {length_of_descendants}")
             for dst_layer, dst_info in layer_map.items():
                 if src_layer == dst_layer:
                     continue  # Skip self-loops
@@ -418,7 +416,7 @@ def compute_interlayer_interactions(data, src_layer: int, dst_layer: int, src_in
     
     return pair_indices, nonzero_values
     
-def compute_distance_matrix(cell_indexes, coord_x, coord_y, toll_distance=1e-6) -> torch.FloatTensor:
+def compute_distance_matrix(cell_indexes, coord_x, coord_y, radius: float = torch.inf, toll_distance=1e-6) -> torch.FloatTensor:
     """
     Compute a distance matrix for cells based on their coordinates.
     
@@ -437,6 +435,7 @@ def compute_distance_matrix(cell_indexes, coord_x, coord_y, toll_distance=1e-6) 
         (torch.tensor(coord_x).view(-1, 1) - torch.tensor(coord_x).view(1, -1)) ** 2 +
         (torch.tensor(coord_y).view(-1, 1) - torch.tensor(coord_y).view(1, -1)) ** 2
     ) + toll_distance  # Add tolerance to avoid division by zero
+    dist_matrix[dist_matrix > radius] = torch.inf  # Apply radius threshold
     dist_matrix = dist_matrix.fill_diagonal_(torch.inf)  # Remove self-interactions by setting diagonal to 0
     return dist_matrix
 

@@ -18,7 +18,7 @@ def _():
     sys.path.insert(0, str(Path(__file__).parents[1]))
     print(sys.path)
     from mlnetst.core.knowledge.networks import load_resource
-    return Path, ad, load_resource, nx, plt, sc, sns
+    return Path, ad, load_resource, nx, pd, plt, sc, sns
 
 
 @app.cell
@@ -205,6 +205,43 @@ def _(net, nx):
     print(a)
     print(b)
     print(len(set(nx.descendants(net, "ifx"))))
+    return
+
+
+@app.cell
+def _(Path, pd):
+    tf_ppr_kegg_mouse = pd.read_csv(str(Path(__file__).parents[1] / "data" / "raw" / "TF_PPR_KEGG_mouse.csv"))
+    print(tf_ppr_kegg_mouse.head(3))
+    tf_ppr_reactome_mouse = pd.read_csv(str(Path(__file__).parents[1] / "data" / "raw" / "TF_PPR_REACTOME_mouse.csv"))
+    print(tf_ppr_reactome_mouse.head(3))
+    tf_tg_trrustv2 = pd.read_csv(str(Path(__file__).parents[1] / "data" / "raw" / "TF_TG_TRRUSTv2_RegNetwork_High_mouse.csv"))
+    print(tf_tg_trrustv2.head(3))
+    import decoupler as dc
+    collectri = dc.get_collectri(organism="mouse")
+    print(collectri)
+    return collectri, tf_ppr_kegg_mouse, tf_ppr_reactome_mouse, tf_tg_trrustv2
+
+
+@app.cell
+def _(
+    collectri,
+    lr_interactions,
+    tf_ppr_kegg_mouse,
+    tf_ppr_reactome_mouse,
+    tf_tg_trrustv2,
+):
+    num_receptor_in_kegg_and_reactome = len(set(tf_ppr_kegg_mouse["receptor"]).intersection(set(tf_ppr_reactome_mouse["receptor"])))
+    print(f"Num of receptors in kegg and reactome: {num_receptor_in_kegg_and_reactome} out of {len(set(tf_ppr_kegg_mouse["receptor"]))} and {len(set(tf_ppr_reactome_mouse["receptor"]))}")
+    num_tf_in_kegg_and_reactome = len(set(tf_ppr_kegg_mouse["tf"]).intersection(set(tf_ppr_reactome_mouse["tf"])))
+    print(f"Num of tf in kegg and reactome: {num_tf_in_kegg_and_reactome} out of {len(set(tf_ppr_kegg_mouse["tf"]))} and {len(set(tf_ppr_reactome_mouse["tf"]))}")
+    num_tg_in_trrust_and_collectri = len(set(tf_tg_trrustv2["tg"]).intersection(set(collectri["target"])))
+    num_tf_in_trrust_and_collectri = len(set(tf_tg_trrustv2["tf"]).intersection(set(collectri["source"])))
+    print(f"Num of tf in trrust and collectr: {num_tf_in_trrust_and_collectri} out of {len(set(tf_tg_trrustv2["tf"]))} and {len(set(collectri["source"]))}")
+    print(f"Num of tg in trrust and collectr: {num_tg_in_trrust_and_collectri} out of {len(set(tf_tg_trrustv2["tg"]))} and {len(set(collectri["target"]))}")
+    num_tf_ppr_in_resources = len(set(tf_ppr_kegg_mouse["tf"]).intersection(set(tf_ppr_reactome_mouse["tf"])).intersection(set(tf_tg_trrustv2["tf"])).intersection(set(collectri["source"])))
+    print(f"Num of tf in all res: {num_tf_ppr_in_resources} out of {len(set(tf_ppr_kegg_mouse["tf"]))}, {len(set(tf_ppr_reactome_mouse["tf"]))}, {len(set(tf_tg_trrustv2["tf"]))} and {len(set(collectri["source"]))}")
+    num_ligands_in_tgs = len(set(lr_interactions["source"].unique().tolist()).intersection(set(tf_tg_trrustv2["tg"])).intersection(set(collectri["target"])))
+    print(f"Num of ligands in all res: {num_ligands_in_tgs} out of {len(set(lr_interactions["source"].unique().tolist()))}, {len(set(tf_tg_trrustv2["tg"]))} and {len(set(collectri["target"]))}")
     return
 
 

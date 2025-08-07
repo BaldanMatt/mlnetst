@@ -11,9 +11,10 @@ from mlnetst.utils import compute_tensor_memory_usage
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from typing import Any
 import logging
+import gc
 
 def assemble_multilayer_network(data, layer_map,
-                                toll_complexes: float = 1e-6, toll_distance: float = 1e-6,
+                                toll_complexes: float = 1e-6, toll_distance: float = 1e-6, radius: float = torch.inf,
                                 build_intra: bool =True, build_inter: bool =True,
                                 mode: str = "tensor",
                                 logger: Any | None = None,
@@ -43,6 +44,7 @@ def assemble_multilayer_network(data, layer_map,
     # Prepare runtime variables
     num_observations = data.shape[0]
     num_layers = len(layer_map)
+
     
     # Init indices and values lists
     indices_list = []  # Will store [dim0, dim1, dim2, dim3] indices
@@ -55,7 +57,7 @@ def assemble_multilayer_network(data, layer_map,
     if build_intra:
         coords_x = data.obs.loc[cell_indexes, "centroid_x"].astype(np.float32).tolist()
         coords_y = data.obs.loc[cell_indexes, "centroid_y"].astype(np.float32).tolist()
-        dist_matrix = compute_distance_matrix(cell_indexes, coords_x, coords_y, toll_distance)
+        dist_matrix = compute_distance_matrix(cell_indexes, coords_x, coords_y, radius, toll_distance)
         if logger:
             logger.info("Distance matrix computed.")
         
@@ -125,23 +127,17 @@ def assemble_multilayer_network(data, layer_map,
         del dist_matrix
     logger.info("Assembling sparse tensor...")
     # Create mapping from original indices to new indices
-    layer_idx_map = {old_idx: new_idx for new_idx, old_idx in enumerate(layer_map.keys())}
     # Combine all indices and values
     if mode == "tensor":
         if indices_list:
             # Concatenate all indices and values
             all_indices = torch.cat(indices_list, dim=1)  # Shape: [4, total_nonzero_elements]
-            # Remap layer indices (indices at positions 1 and 3)
-            all_indices[1] = torch.tensor([layer_idx_map[idx.item()] for idx in all_indices[1]], 
-                                        dtype=all_indices.dtype,
-                                        device=all_indices.device)
-            all_indices[3] = torch.tensor([layer_idx_map[idx.item()] for idx in all_indices[3]], 
-                                        dtype=all_indices.dtype,
-                                        device=all_indices.device)
             del indices_list  # Free memory
+            
             all_values = torch.cat(values_list, dim=0)  # Shape: [total_nonzero_elements]
             del values_list  # Free memory
 
+            gc.collect()
             # Create sparse tensor in COO format
             mlnet_sparse = torch.sparse_coo_tensor(
                 indices=all_indices,

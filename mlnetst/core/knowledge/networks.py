@@ -2,7 +2,24 @@ from pathlib import Path
 import os
 import pandas as pd
 
-def load_resource(name: str, force: bool = False) -> pd.DataFrame:
+def load_resource(name: str, force: bool = False, extra_params: dict = {}) -> pd.DataFrame:
+    """
+    Load a specific resource based on the provided name and standardize return metadata.
+
+    Args:
+        name (str): The name of the resource to load.
+        force (bool, optional): Whether to force reload the resource. Defaults to False.
+
+    Raises:
+        NotImplementedError: If the resource is not implemented.
+
+    Returns:
+        pd.DataFrame: The loaded resource as a DataFrame.
+            columns: ["source", "target", "weight", "provenance", "interaction_type"]
+    """
+    
+    
+    
     if name == "mouseconsensus":
         import liana as li
         print("Thanks for choosing the mouseconsensus from liana")
@@ -12,6 +29,10 @@ def load_resource(name: str, force: bool = False) -> pd.DataFrame:
         return lr_consensus
     elif name == "nichenet":
         print("Thanks for choosing the nichenet resource")
+        which_provenance = extra_params.get("provenance", "all")
+        if which_provenance not in ["all", "lr_sig", "gr"]:
+            raise ValueError("Invalid provenance specified. Choose from 'all', 'lr_sig', or 'gr'.")
+        
         gr_df = pd.read_csv(
             Path(__file__).parents[3] / "data" / "raw" / "gr.csv"
         )
@@ -26,7 +47,15 @@ def load_resource(name: str, force: bool = False) -> pd.DataFrame:
         lr_sig["provenance"] = "nichenet_lr_sig"
         gr_df["provenance"] = "nichenet_gr"
         # Concatenate the two dataframes
-        nichenet_net = pd.concat([lr_sig, gr_df], ignore_index=True)
+        if which_provenance == "all":
+            print("Combining ligand-receptor and gene regulatory interactions")
+            nichenet_net = pd.concat([lr_sig, gr_df], ignore_index=True)
+        elif which_provenance == "lr_sig":
+            print("Using only ligand-receptor interactions")
+            nichenet_net = lr_sig
+        elif which_provenance == "gr":
+            print("Using only gene regulatory interactions")
+            nichenet_net = gr_df
         return nichenet_net
     elif name == "geneprograms":
         print("Thanks for choosing the niche compass gene programs")
@@ -124,10 +153,49 @@ def load_resource(name: str, force: bool = False) -> pd.DataFrame:
     elif name == "collectri":
         print("thanks for choosing the collectri resource")
         import decoupler as dc
-        net = dc.op.collectri(
+        net = dc.get_collectri(
             organism="mouse",
-            remove_complexes=False,
-            )
+            split_complexes=False,
+        )
+
+    elif name == "scseqcomm":
+        print("thanks for choosing the scseqcomm resource")
+        import decoupler as dc
+        tf_tg_collectri = dc.get_collectri(
+            organism="mouse",
+            split_complexes=False,
+            
+        )
+        tf_tg_trrust = pd.read_csv(
+            Path(__file__).parents[3] / "data" / "raw" / "TF_TG_TRRUSTv2_RegNetwork_High_mouse.csv"
+        )
+        rec_tf_kegg = pd.read_csv(
+            Path(__file__).parents[3] / "data" / "raw" / "TF_PPR_KEGG_mouse.csv"
+        )
+        rec_tf_reactome = pd.read_csv(
+            Path(__file__).parents[3] / "data" / "raw" / "TF_PPR_REACTOME_mouse.csv"
+        )
+        
+        # Rename columns to source and target
+        tf_tg_collectri.rename(columns={"source": "source", "target": "target"}, inplace=True)
+        tf_tg_trrust.rename(columns={"tf": "source", "tg": "target"}, inplace=True)
+        rec_tf_kegg.rename(columns={"receptor": "source", "tf": "target", "tf_PPR": "weight"}, inplace=True)
+        rec_tf_reactome.rename(columns={"receptor": "source", "tf": "target", "tf_PPR": "weight"}, inplace=True)
+        net = pd.concat(
+            [tf_tg_collectri, tf_tg_trrust, rec_tf_kegg, rec_tf_reactome],
+            ignore_index=True
+        )
         return net
+        
     else:
         raise NotImplementedError("Requested resource is not available yet")
+
+if __name__ == "__main__":
+    resource = "scseqcomm"
+    df = load_resource(resource, force=True)
+    print(f"Loaded {resource} resource with {df.shape[0]} interactions.")
+    print(df.head())
+    print(df.columns)
+    print(df.info())
+    print(df["source"].nunique(), "unique sources")
+    print(df["target"].nunique(), "unique targets")
