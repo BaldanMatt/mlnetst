@@ -762,6 +762,7 @@ def compute_average_global_clustering(supra_adjacency_matrix: torch.Tensor, n: i
         De Domenico et al. (2013) "Mathematical formulation of multilayer networks"
         Physical Review X, 3(4), 041022.
     """
+    from time import time
     supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
     indexes = supra_adjacency_matrix.indices()
     values = supra_adjacency_matrix.values()
@@ -774,15 +775,33 @@ def compute_average_global_clustering(supra_adjacency_matrix: torch.Tensor, n: i
     print("Supra-adjacency matrix shape:", supra_adjacency_matrix.shape)
     print("Supra-adjacency matrix nnz:", supra_adjacency_matrix.nnz)
 
+    # Convert supra_adjacency_matrix to CSR format for efficient multiplication
+    supra_adjacency_matrix = supra_adjacency_matrix.tocsr()
+    print("Converted supra-adjacency matrix to CSR format.")
+
     # Compute numerator: tr(A^2 * A)
-    numerator = (supra_adjacency_matrix @ supra_adjacency_matrix @ supra_adjacency_matrix).diagonal().sum()
+    print("Computing numerator...")
+    num_start = time()
+    numerator_step_1 = supra_adjacency_matrix @ supra_adjacency_matrix
+    print("Numerator step 1 done... in", time() - num_start, " seconds")
+    start = time()
+    numerator_step_2 = numerator_step_1 @ supra_adjacency_matrix
+    print("Numerator step 2 done... in ", time() - start, " seconds")
+    start = time()
+    numerator = numerator_step_2.diagonal().sum()
+    print("Numerator step 3 done... in ", time() - start, " seconds")
     # Compute the F matrix: Ones() - Eye()
+    start = time()
     ones_matrix = np.ones((n*l, n*l), dtype=np.float32)
-    eye_matrix = sp.sparse.coo_matrix(np.eye(n*l, dtype=np.float32))
+    eye_matrix = sp.sparse.eye(n*l, format="csr", dtype=np.float32)
     f_matrix = ones_matrix - eye_matrix
+    print("Numerator done... in", time() - num_start, " seconds with last step that took ", time() - start, " seconds")
 
     # Compute the denominator: tr(A * F * A)
+    print("Computing denominator...")
+    den_start = time()
     denominator = (supra_adjacency_matrix @ f_matrix @ supra_adjacency_matrix).diagonal().sum()
+    print("Denominator done... in ", time() - den_start, " seconds")
 
     return numerator / (max(supra_adjacency_matrix.data) * denominator) if denominator != 0 else 0.0
 
@@ -790,6 +809,7 @@ def compute_average_global_clustering(supra_adjacency_matrix: torch.Tensor, n: i
 def compute_local_clustering_coefficient(supra_adjacency_matrix: torch.Tensor, node_index: int, layer_index: int, n: int, l: int) -> float:
     f_matrix = torch.ones(n*l, n*l, dtype=torch.float32, device=supra_adjacency_matrix.device) - torch.eye(n*l, dtype=torch.float32, device=supra_adjacency_matrix.device)
     #
+    pass
 
 if __name__ == "__main__":
     n, l = 10, 3
@@ -871,4 +891,3 @@ if __name__ == "__main__":
     # Test single metric
     nodes_katz_centrality = compute_katz_centrality(sparse_matrix, n, l)
     print("Katz centrality for each node:", nodes_katz_centrality)
-    

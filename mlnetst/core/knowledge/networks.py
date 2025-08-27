@@ -161,11 +161,17 @@ def load_resource(name: str, force: bool = False, extra_params: dict = {}) -> pd
     elif name == "scseqcomm":
         print("thanks for choosing the scseqcomm resource")
         import decoupler as dc
-        tf_tg_collectri = dc.get_collectri(
-            organism="mouse",
-            split_complexes=False,
-            
-        )
+        if  (Path(__file__).parents[3] / "data" / "raw" / "TF_TG_collectri_mouse.csv").exists():
+            tf_tg_collectri = pd.read_csv(
+                Path(__file__).parents[3] / "data" / "raw" / "TF_TG_collectri_mouse.csv"
+            )
+            print("Loaded collectri TF-TG from disk")
+        else:
+            print("[WARNING] Downloading collectri TF-TG from decoupler, this may take a while... IN CLUSTER IS NOT POSSIBLE")
+            tf_tg_collectri = dc.get_collectri(
+                organism="mouse",
+                split_complexes=False,   
+            )
         tf_tg_trrust = pd.read_csv(
             Path(__file__).parents[3] / "data" / "raw" / "TF_TG_TRRUSTv2_RegNetwork_High_mouse.csv"
         )
