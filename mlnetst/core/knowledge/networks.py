@@ -166,6 +166,7 @@ def load_resource(name: str, force: bool = False, extra_params: dict = {}) -> pd
             split_complexes=False,
             
         )
+
         tf_tg_trrust = pd.read_csv(
             Path(__file__).parents[3] / "data" / "raw" / "TF_TG_TRRUSTv2_RegNetwork_High_mouse.csv"
         )
@@ -181,6 +182,10 @@ def load_resource(name: str, force: bool = False, extra_params: dict = {}) -> pd
         tf_tg_trrust.rename(columns={"tf": "source", "tg": "target"}, inplace=True)
         rec_tf_kegg.rename(columns={"receptor": "source", "tf": "target", "tf_PPR": "weight"}, inplace=True)
         rec_tf_reactome.rename(columns={"receptor": "source", "tf": "target", "tf_PPR": "weight"}, inplace=True)
+        tf_tg_collectri.to_csv(
+            Path(__file__).parents[3] / "data" / "raw" / "TF_TG_collectri_mouse.csv",
+            index=False
+        )
         net = pd.concat(
             [tf_tg_collectri, tf_tg_trrust, rec_tf_kegg, rec_tf_reactome],
             ignore_index=True
