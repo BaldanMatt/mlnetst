@@ -1,5 +1,48 @@
 import torch
 import networkx as nx
+import pandas as pd
+
+def build_edgelist_from_tensor(t):
+    """
+    Build an edge list from a tensor of mlnetsparse interactions.
+    
+    Args:
+        t (torch.Tensor): Input tensor of shape (N, L, N, L).
+
+    Returns:
+        pd.DataFrame: Edge list with columns [node.from, layer.from, node.to, layer.to, weight].
+    """
+    if not isinstance(t, torch.Tensor):
+        raise TypeError("Input must be a torch.Tensor")
+    
+    n, l = t.shape[0], t.shape[1]
+    if len(t.shape) != 4 or t.shape[0] != n or t.shape[2] != n or t.shape[1] != l or t.shape[3] != l:
+        raise ValueError(f"Input tensor must be of shape ({n}, {l}, {n}, {l}), but got {t.shape}")
+    
+    t = t.coalesce()
+    indices = t.indices()
+    values = t.values()
+
+    edge_list = pd.DataFrame({
+        "node.from": indices[0],
+        "layer.from": indices[1],
+        "node.to": indices[2],
+        "layer.to": indices[3],
+        "weight": values
+    })
+
+    return edge_list
+
+def build_supratransition_from_supra_adjacency_matrix(supra_matrix, n, l):
+    """
+    Build a supratransition matrix from a supra-adjacency matrix.
+    
+    Args:
+        supra_matrix (torch.Tensor): Sparse Input tensor of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    """
+    pass
 
 def build_tensor_from_supra_adjacency_matrix(supra_matrix, n, l):
     """

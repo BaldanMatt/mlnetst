@@ -1,0 +1,49 @@
+Bootstrap: docker
+From: python:3.12-slim
+
+%labels
+    Author YourName
+    Version 1.0
+    Description Singularity container for mlnetst using Python slim
+
+%environment
+    export LC_ALL=C
+    export LANG=C
+    export PATH=/opt/venv/bin:$PATH
+
+%post
+    # Update and install essential build tools for packages requiring compilation
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        g++ \
+        fontconfig \
+        libfreetype6 \
+        libfreetype6-dev \
+        libx11-6 \
+        libxext6 \
+        libxrender1 \
+        libsm6 \
+        libxext-dev \
+        libxrender-dev \
+        libgl1 \
+        git \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Create a virtual environment
+    python -m venv /opt/venv
+    . /opt/venv/bin/activate
+
+    # Upgrade pip and install project dependencies
+    pip install --upgrade pip setuptools wheel
+    pip install -r /mnt/requirements.txt
+    pip install liana decoupler torch-scatter torch-sparse xarray
+
+%files
+    # Copy your project and requirements
+    requirements.txt /mnt/requirements.txt
+
+%runscript
+    # Default run command
+    exec python "$@"
+

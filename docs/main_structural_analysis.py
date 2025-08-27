@@ -54,7 +54,6 @@ from mlnetst.utils.mlnet_metrics_utils import (
     compute_multi_outdegree,
     compute_multi_instrength,
     compute_multi_outstrength,
-    compute_total_degree,
     compute_average_global_clustering
 )
 
@@ -1005,12 +1004,14 @@ def build_multilayer_network(
 
 def save_network_data(
     mlnet: torch.Tensor,
+    subdata: anndata.AnnData,
     experiment_name: str,
     logger: logging.Logger
 ) -> Path:
     """Save network data to disk."""
     network_path = PROJECT_ROOT / "data" / "processed" / f"{experiment_name}_mlnet.pth"
     torch.save(mlnet, network_path)
+    subdata.write_h5ad(PROJECT_ROOT / "data" / "processed" / f"{experiment_name}_subdata.h5ad")
     logger.info(f"✅ Multilayer network saved to: {network_path}")
     return network_path
 
@@ -1072,7 +1073,7 @@ def main() -> None:
                 mapping_logger, network_logger
             )
             # Save network
-            save_network_data(mlnet, args.experiment_name, main_logger)
+            save_network_data(mlnet, subdata, args.experiment_name, main_logger)
         
         # Analyze and visualize
         # Update args.num_cells to reflect actual number of cells used

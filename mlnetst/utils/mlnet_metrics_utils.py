@@ -4,591 +4,9 @@ import pymnet
 from mlnetst.utils.mlnet_utils import get_aggregate_from_supra_adjacency_matrix, build_supra_adjacency_matrix_from_tensor, binarize_matrix
 import scipy as sp
 
-
-def get_diagonal_blocks(n: int, l: int, device: torch.device = None) -> torch.Tensor:
-    """
-    Create a mask for diagonal blocks in a supra-adjacency matrix.
-
-    Args:
-        n (int): Number of nodes.
-        l (int): Number of layers.
-        device (torch.device, optional): Device to create the tensor on. Defaults to None.
-
-    Returns:
-        torch.Tensor: A boolean mask tensor of shape (N * L, N * L) with True values in the diagonal blocks.
-    """
-
-    # Create basic NxN block of ones
-    block = torch.ones(n, n, dtype=torch.bool, device=device)
-    
-    # Create initial empty mask
-    mask = torch.zeros(n*l, n*l, dtype=torch.bool, device=device)
-    
-    # Fill diagonal blocks
-    for i in range(l):
-        start_idx = i * n
-        end_idx = (i + 1) * n
-        mask[start_idx:end_idx, start_idx:end_idx] = block
-        
-    return mask
-
-def get_non_diagonal_blocks(n: int, l: int, device: torch.device = None) -> torch.Tensor:
-    """
-    Create a mask for non-diagonal blocks in a supra-adjacency matrix.
-
-    For a matrix of size (N*L x N*L) composed of LxL blocks of size (NxN),
-    creates a boolean mask that keeps only the non-diagonal blocks.
-
-    Args:
-        n (int): Number of nodes.
-        l (int): Number of layers.
-        device (torch.device, optional): Device to create the tensor on. Defaults to None.
-
-    Returns:
-        torch.Tensor: A boolean mask tensor of shape (N*L, N*L) with True values 
-                     in the non-diagonal blocks.
-    
-    Example for N=2, L=2:
-        [[0 0 1 1]
-         [0 0 1 1]
-         [1 1 0 0]
-         [1 1 0 0]]
-    """
-    # Create full mask of ones
-    mask = torch.ones(n*l, n*l, dtype=torch.bool, device=device)
-    
-    # Create basic NxN block of ones for diagonal
-    block = torch.ones(n, n, dtype=torch.bool, device=device)
-    
-    # Zero out diagonal blocks
-    for i in range(l):
-        start_idx = i * n
-        end_idx = (i + 1) * n
-        mask[start_idx:end_idx, start_idx:end_idx] = ~block
-        
-    return mask
-
-def is_in_diagonal_block(indices: torch.Tensor, n: int) -> torch.Tensor:
-    """
-    Check which indices belong to diagonal blocks of a supra adjacency matrix.
-
-    Args:
-        indices: Tensor of shape (2, nnz) containing [row, col] indices
-        n: Number of nodes per layer
-        
-    Returns:
-        Boolean mask of length nnz indicating which indices are in diagonal blocks
-    """
-    # Get layer indices for rows and columns
-    layer_row = indices[0] // n
-    layer_col = indices[1] // n
-    
-    # Indices are in diagonal blocks if they're in the same layer
-    return layer_row == layer_col
-
-def compute_aggregated_indegree(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
-    """
-    Compute aggregated indegree across all layers for each node.
-    
-    This function aggregates incoming edges from all layers for each node, considering only
-    intra-layer connections (diagonal blocks of the supra-adjacency matrix).
-    
-    Args:
-        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N*L, N*L) representing
-            the supra-adjacency matrix where N is number of nodes and L is number of layers
-        n (int): Number of nodes per layer
-        l (int): Number of layers
-        
-    Returns:
-        torch.Tensor: Tensor of shape (N,) containing aggregated indegrees for each node
-        
-    Note:
-        This is more efficient than compute_indegree when you only need aggregated values
-        across layers rather than per-layer breakdown.
-    """
-    # Get sparse indices and values
-    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-    indices = supra_adjacency_matrix.indices()
-    values = supra_adjacency_matrix.values()
-    
-    # find which indices are in diagonal blocks. One index is a pair of (row, col)
-    diagonal_mask = is_in_diagonal_block(indices, n)
-    
-    # Filter indices and values
-    diagonal_indices = indices[:, diagonal_mask]
-    diagonal_values = values[diagonal_mask]
-    
-    # Create binary values for degree calculation
-    binary_values = torch.ones_like(diagonal_values)
-    
-    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
-    # indices within layers. 
-    node_indices = diagonal_indices[1] % n
-    
-    # Accumulate degrees
-    nodes_indegrees = torch.zeros(n, device=supra_adjacency_matrix.device)
-    nodes_indegrees.index_add_(0, node_indices, binary_values)
-    
-    return nodes_indegrees
-
-def compute_indegree(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
-    """
-    Compute indegree for each node replica in a multilayer network.
-    
-    This function computes the number of incoming edges for each node in each layer,
-    treating each (node, layer) combination as a separate entity. Only considers
-    intra-layer connections (diagonal blocks).
-    
-    Args:
-        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N*L, N*L)
-        n (int): Number of nodes per layer
-        l (int): Number of layers
-        
-    Returns:
-        torch.Tensor: Tensor of shape (N, L) where entry [i,j] is the indegree
-            of node i in layer j
-            
-    Note:
-        For aggregated indegree across layers, use compute_aggregated_indegree() 
-        which is more efficient.
-    """
-    # Get sparse indices and values
-    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-    indices = supra_adjacency_matrix.indices()
-    values = supra_adjacency_matrix.values()
-
-    # Find which indices are in diagonal blocks
-    diagonal_mask = is_in_diagonal_block(indices, n)
-
-    # Filter indices and values
-    diagonal_indices = indices[:, diagonal_mask]
-    diagonal_values = values[diagonal_mask]
-
-    # Create binary values for degree calculation
-    binary_values = torch.ones_like(diagonal_values)
-
-    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
-    # indices within layers. Compute indegree for each layer simultaneously
-    node_indegrees = torch.zeros((n, l), device=supra_adjacency_matrix.device)
-    
-    # Get target layer indices and node indices within layers
-    target_layer_indices = diagonal_indices[1] // n  # Which layer the target node is in
-    target_node_indices = diagonal_indices[1] % n    # Which node within that layer
-    
-    # Create combined indices for scatter_add: [node_idx * l + layer_idx]
-    combined_indices = target_node_indices * l + target_layer_indices
-    
-    # Flatten the node_indegrees tensor and use scatter_add
-    node_indegrees_flat = node_indegrees.view(-1)
-    node_indegrees_flat.scatter_add_(0, combined_indices, binary_values)
-    
-    # Reshape back to (n, l)
-    node_indegrees = node_indegrees_flat.view(n, l)
-    print("Indegrees computed for each layer:", node_indegrees)
-    return node_indegrees
-
-
-def compute_indegree_for_layer(supra_adjacency_matrix: torch.Tensor, layer_index: int, n: int, l: int) -> torch.Tensor:
-    """
-    Compute indegree for a specific layer in a multilayer network.
-    
-    Args:
-        supra_adjacency_matrix: Sparse tensor of shape (N*L, N*L)
-        layer_index: Index of the layer to compute indegree for
-        n: Number of nodes per layer
-        l: Number of layers
-        
-    Returns:
-        Tensor of shape (N,) containing indegrees for the specified layer
-    """
-    print(f"Computing indegree for layer {layer_index} with n={n}, l={l}")
-    if layer_index < 0 or layer_index >= l:
-        raise ValueError(f"Layer index {layer_index} is out of bounds for {l} layers.")
-    
-    # Calculate the start and end indices for the layer
-    start_index = layer_index * n
-    end_index = start_index + n
-
-    if supra_adjacency_matrix.is_sparse:
-        # Get sparse indices and values
-        supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-        indices = supra_adjacency_matrix.indices()
-        values = supra_adjacency_matrix.values()
-    else:
-        raise NotImplementedError("Supra-adjacency matrix must be a sparse tensor.")
-    
-    # Create a mask for the specified layer
-    layer_mask = (indices[0] >= start_index) & (indices[0] < end_index) & (indices[1] >= start_index) & (indices[1] < end_index)
-    
-    # Filter indices and values for the specified layer
-    layer_indices = indices[:, layer_mask]
-    layer_values = values[layer_mask]
-
-    # Create binary values for degree calculation
-    binary_values = torch.ones_like(layer_values)
-    print(binary_values)
-
-    node_indegrees = torch.zeros(n, device=supra_adjacency_matrix.device)
-    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
-    # indices within layers. 
-    node_indices = layer_indices[1] % n
-    
-    # Accumulate degrees
-    node_indegrees.index_add_(0, node_indices, binary_values)
-    return node_indegrees
-
-def compute_instrength(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
-    """
-    Compute the instrength of each node, considering them as replica nodes in a multilayer network.
-    
-    Args:
-        supra_adjacency_matrix: Sparse tensor of shape (N*L, N*L)
-        n: Number of nodes per layer
-        l: Number of layers
-    Returns:
-        Tensor of shape (N*L,) containing instengths
-    """
-    # Get sparse indices and values
-    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-    indices = supra_adjacency_matrix.indices()
-    values = supra_adjacency_matrix.values()
-    
-    # Find which indices are in diagonal blocks
-    diagonal_mask = is_in_diagonal_block(indices, n)
-    
-    # Filter indices and values
-    diagonal_indices = indices[:, diagonal_mask]
-    diagonal_values = values[diagonal_mask]
-    
-    # Compute node indices within layers
-    node_indices = diagonal_indices[1] % n
-    
-    # Accumulate strengths
-    nodes_instrengths = torch.zeros(n, device=supra_adjacency_matrix.device)
-    nodes_instrengths.index_add_(0, node_indices, diagonal_values)
-    
-    return nodes_instrengths
-    
-
-def compute_outdegree(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
-    """
-    Compute the outdegree of each node, considering them as replica nodes in a multilayer network.
-
-    Args:
-        supra_adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
-        n (int): Number of nodes.
-        l (int): Number of layers.
-
-    Returns:
-        torch.Tensor: A tensor of shape (N * L) containing the outdegree of each node.
-    """
-    # Get sparse indices and values
-    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-    indices = supra_adjacency_matrix.indices()
-    values = supra_adjacency_matrix.values()
-    
-    # Find which indices are in diagonal blocks
-    diagonal_mask = is_in_diagonal_block(indices, n)
-    
-    # Filter indices and values
-    diagonal_indices = indices[:, diagonal_mask]
-    diagonal_values = values[diagonal_mask]
-    
-    # Create binary values for degree calculation
-    binary_values = torch.ones_like(diagonal_values)
-    
-    # Compute node indices within layers
-    node_indices = diagonal_indices[0] % n
-    
-    # Accumulate degrees
-    nodes_outdegrees = torch.zeros(n, device=supra_adjacency_matrix.device)
-    nodes_outdegrees.index_add_(0, node_indices, binary_values)
-
-    return nodes_outdegrees
-
-def compute_outstrength(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
-    """
-    Compute the outstrength of each node, considering them as replica nodes in a multilayer network.
-
-    Args:
-        supra_adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
-        n (int): Number of nodes.
-        l (int): Number of layers.
-
-    Returns:
-        torch.Tensor: A tensor of shape (N * L) containing the outstrength of each node.
-    """
-    # Get sparse indices and values
-    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-    indices = supra_adjacency_matrix.indices()
-    values = supra_adjacency_matrix.values()
-
-    # Find which indices are in diagonal blocks
-    diagonal_mask = is_in_diagonal_block(indices, n)
-
-    # Filter indices and values
-    diagonal_indices = indices[:, diagonal_mask]
-    diagonal_values = values[diagonal_mask]
-
-    # Compute node indices within layers
-    node_indices = diagonal_indices[0] % n
-
-    # Accumulate strengths
-    nodes_outstrengths = torch.zeros(n, device=supra_adjacency_matrix.device)
-    nodes_outstrengths.index_add_(0, node_indices, diagonal_values)
-
-    return nodes_outstrengths
-
-def compute_multi_indegree(supra_adjacency_matrix: torch.Tensor, n:int, l: int) -> torch.Tensor:
-    """
-    Memory-efficient computation of multi-indegree for non-diagonal blocks.
-    
-    Args:
-        supra_adjacency_matrix: Sparse tensor of shape (N*L, N*L)
-        n: Number of nodes per layer
-        l: Number of layers
-        
-    Returns:
-        Tensor of shape (N,) containing multi-indegrees
-    """
-    # Get sparse indices and values
-    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-    indices = supra_adjacency_matrix.indices()
-    values = supra_adjacency_matrix.values()
-    
-    # Find which indices are in non-diagonal blocks
-    non_diagonal_mask = ~is_in_diagonal_block(indices, n)
-    
-    # Filter indices and values
-    non_diagonal_indices = indices[:, non_diagonal_mask]
-    non_diagonal_values = values[non_diagonal_mask]
-    
-    # Create binary values for degree calculation
-    binary_values = torch.ones_like(non_diagonal_values)
-    
-    # Compute node indices within layers
-    node_indices = non_diagonal_indices[1] % n
-    
-    # Accumulate degrees
-    nodes_multi_indegrees = torch.zeros(n, device=supra_adjacency_matrix.device)
-    nodes_multi_indegrees.index_add_(0, node_indices, binary_values)
-    
-    return nodes_multi_indegrees
-
-def compute_multi_instrength(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
-    """
-    Memory-efficient computation of multi-instrength for non-diagonal blocks.
-    
-    Args:
-        supra_adjacency_matrix: Sparse tensor of shape (N*L, N*L)
-        n: Number of nodes per layer
-        l: Number of layers
-        
-    Returns:
-        Tensor of shape (N*L,) containing multi-instrengths
-    """
-    # Get sparse indices and values
-    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-    indices = supra_adjacency_matrix.indices()
-    values = supra_adjacency_matrix.values()
-    
-    # Find which indices are in non-diagonal blocks
-    non_diagonal_mask = ~is_in_diagonal_block(indices, n)
-    
-    # Filter indices and values
-    non_diagonal_indices = indices[:, non_diagonal_mask]
-    
-    #TODO #diagonal_indices = indices[:, ~non_diagonal_mask]
-    non_diagonal_values = values[non_diagonal_mask]
-    
-    # Compute node indices within layers
-    node_indices = non_diagonal_indices[1] % n
-    
-    # Accumulate strengths
-    nodes_multi_instrengths = torch.zeros(n, device=supra_adjacency_matrix.device)
-    nodes_multi_instrengths.index_add_(0, node_indices, non_diagonal_values)
-    
-    return nodes_multi_instrengths
-    
-def compute_multi_outdegree(supra_adjacency_matrix, n, l):
-    """
-    Memory-efficient computation of multi-outdegree for non-diagonal blocks.
-
-    Args:
-        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N * L, N * L).
-        n (int): Number of nodes.
-        l (int): Number of layers.
-        
-    Returns:
-        torch.Tensor: A tensor of shape (N,) containing multi-outdegrees.
-    """
-    # Get sparse indices and values
-    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-    indices = supra_adjacency_matrix.indices()
-    values = supra_adjacency_matrix.values()
-    
-    # Find which indices are in non-diagonal blocks
-    non_diagonal_mask = ~is_in_diagonal_block(indices, n)
-    
-    # Filter indices and values
-    non_diagonal_indices = indices[:, non_diagonal_mask]
-    non_diagonal_values = values[non_diagonal_mask]
-    
-    # Create binary values for degree calculation
-    binary_values = torch.ones_like(non_diagonal_values)
-    
-    # Compute node indices within layers
-    node_indices = non_diagonal_indices[0] % n
-    
-    # Accumulate degrees
-    nodes_multi_outdegrees = torch.zeros(n, device=supra_adjacency_matrix.device)
-    nodes_multi_outdegrees.index_add_(0, node_indices, binary_values)
-    
-    return nodes_multi_outdegrees
-
-def compute_multi_outstrength(supra_adjacency_matrix, n, l):
-    """
-    Memory-efficient computation of multi-outstrength for non-diagonal blocks.
-
-    Args:
-        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N * L, N * L).
-        n (int): Number of nodes.
-        l (int): Number of layers.
-        
-    Returns:
-        torch.Tensor: A tensor of shape (N * L,) containing multi-outstrengths.
-    """
-    # Get sparse indices and values
-    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-    indices = supra_adjacency_matrix.indices()
-    values = supra_adjacency_matrix.values()
-    
-    # Find which indices are in non-diagonal blocks
-    non_diagonal_mask = ~is_in_diagonal_block(indices, n)
-    
-    # Filter indices and values
-    non_diagonal_indices = indices[:, non_diagonal_mask]
-    non_diagonal_values = values[non_diagonal_mask]
-    
-    # Compute node indices within layers
-    node_indices = non_diagonal_indices[0] % n
-    
-    # Accumulate strengths
-    nodes_multi_outstrengths = torch.zeros(n, device=supra_adjacency_matrix.device)
-    nodes_multi_outstrengths.index_add_(0, node_indices, non_diagonal_values)
-    
-    return nodes_multi_outstrengths
-
-def compute_all_basic_metrics(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> dict:
-    """
-    Efficiently compute all basic metrics in a single pass through the sparse matrix.
-    
-    This function is more efficient than calling individual metric functions when you need
-    multiple metrics, as it processes the sparse matrix only once.
-    
-    Args:
-        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N*L, N*L)
-        n (int): Number of nodes per layer
-        l (int): Number of layers
-        
-    Returns:
-        dict: Dictionary containing all computed metrics:
-            - 'aggregated_indegree': shape (N,)
-            - 'aggregated_outdegree': shape (N,) 
-            - 'aggregated_instrength': shape (N,)
-            - 'aggregated_outstrength': shape (N,)
-            - 'multi_indegree': shape (N,)
-            - 'multi_outdegree': shape (N,)
-            - 'multi_instrength': shape (N,)
-            - 'multi_outstrength': shape (N,)
-            - 'indegree_per_layer': shape (N, L)
-    """
-    # Single preprocessing step
-    if not supra_adjacency_matrix.is_sparse:
-        raise ValueError("Matrix must be sparse for efficient computation")
-    
-    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
-    indices = supra_adjacency_matrix.indices()
-    values = supra_adjacency_matrix.values()
-    
-    diagonal_mask = is_in_diagonal_block(indices, n)
-    non_diagonal_mask = ~diagonal_mask
-    
-    # Split indices and values once
-    diag_indices = indices[:, diagonal_mask]
-    diag_values = values[diagonal_mask]
-    non_diag_indices = indices[:, non_diagonal_mask]
-    non_diag_values = values[non_diagonal_mask]
-    
-    device = supra_adjacency_matrix.device
-    
-    # Initialize result tensors
-    results = {
-        'aggregated_indegree': torch.zeros(n, device=device),
-        'aggregated_outdegree': torch.zeros(n, device=device),
-        'aggregated_instrength': torch.zeros(n, device=device),
-        'aggregated_outstrength': torch.zeros(n, device=device),
-        'multi_indegree': torch.zeros(n, device=device),
-        'multi_outdegree': torch.zeros(n, device=device),
-        'multi_instrength': torch.zeros(n, device=device),
-        'multi_outstrength': torch.zeros(n, device=device),
-        'indegree_per_layer': torch.zeros((n, l), device=device)
-    }
-    
-    # Process diagonal blocks (intra-layer)
-    if diag_indices.numel() > 0:
-        diag_binary = torch.ones_like(diag_values)
-        
-        # Indegree and instrength (target nodes)
-        target_nodes = diag_indices[1] % n
-        results['aggregated_indegree'].index_add_(0, target_nodes, diag_binary)
-        results['aggregated_instrength'].index_add_(0, target_nodes, diag_values)
-        
-        # Outdegree and outstrength (source nodes)
-        source_nodes = diag_indices[0] % n
-        results['aggregated_outdegree'].index_add_(0, source_nodes, diag_binary)
-        results['aggregated_outstrength'].index_add_(0, source_nodes, diag_values)
-        
-        # Per-layer indegree
-        target_layers = diag_indices[1] // n
-        target_nodes_per_layer = target_nodes * l + target_layers
-        results['indegree_per_layer'].view(-1).scatter_add_(0, target_nodes_per_layer, diag_binary)
-    
-    # Process non-diagonal blocks (inter-layer)
-    if non_diag_indices.numel() > 0:
-        non_diag_binary = torch.ones_like(non_diag_values)
-        
-        # Multi-indegree and multi-instrength
-        multi_target_nodes = non_diag_indices[1] % n
-        results['multi_indegree'].index_add_(0, multi_target_nodes, non_diag_binary)
-        results['multi_instrength'].index_add_(0, multi_target_nodes, non_diag_values)
-        
-        # Multi-outdegree and multi-outstrength
-        multi_source_nodes = non_diag_indices[0] % n
-        results['multi_outdegree'].index_add_(0, multi_source_nodes, non_diag_binary)
-        results['multi_outstrength'].index_add_(0, multi_source_nodes, non_diag_values)
-    
-    return results
-
-def compute_total_degree(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
-    """
-    Compute the total degree of each node across all layers.
-    
-    The total degree is the sum of intra-layer and inter-layer degrees (both in and out).
-    This function uses the efficient batch computation method.
-    
-    Args:
-        supra_adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
-        n (int): Number of nodes.
-        l (int): Number of layers.
-
-    Returns:
-        torch.Tensor: A tensor of shape (N,) containing the total degree of each node.
-    """
-    metrics = compute_all_basic_metrics(supra_adjacency_matrix, n, l)
-    return (metrics['aggregated_indegree'] + metrics['aggregated_outdegree'] + 
-            metrics['multi_indegree'] + metrics['multi_outdegree'])
-
+"""
+Utilities for computing various metrics on multilayer networks.
+"""
 def find_node_neighbors_within_layer(supra_adjacency_matrix: torch.Tensor, node_index: int, layer_index: int, n: int, l:int) -> torch.Tensor:
     """
     This function finds which are the nodes that are neighbors of a given node in a specific layer of a multilayer network.
@@ -683,6 +101,605 @@ def find_node_neighbors_outside_layer(supra_adjacency_matrix: torch.Tensor, node
     
     return local_outside_neighbors, unique_neighbors
 
+def get_eigenvalues(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> float:
+    """
+    Compute the largest eigenvalue of the supra-adjacency matrix.
+    Uses the power iteration method for efficiency.
+    Args:
+
+        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N*L, N*L)
+        n (int): Number of nodes per layer
+        l (int): Number of layers
+    Returns:
+
+        float: The largest eigenvalue of the supra-adjacency matrix.
+
+    """
+    # Ensure the matrix is sparse
+    if not supra_adjacency_matrix.is_sparse:
+        raise ValueError("Supra-adjacency matrix must be a sparse tensor.")
+    indices = supra_adjacency_matrix.indices()
+    values = supra_adjacency_matrix.values()
+    sparse_array = sp.sparse.coo_matrix(
+        (values.cpu().numpy(), (indices[0].cpu().numpy(), indices[1].cpu().numpy())),
+        shape=(n * l, n * l)
+    )
+    eigen = sp.sparse.linalg.eigs(sparse_array)
+    return eigen
+    
+def is_in_diagonal_block(indices: torch.Tensor, n: int) -> torch.Tensor:
+    """
+    Check which indices belong to diagonal blocks of a supra adjacency matrix.
+
+    Args:
+        indices: Tensor of shape (2, nnz) containing [row, col] indices
+        n: Number of nodes per layer
+        
+    Returns:
+        Boolean mask of length nnz indicating which indices are in diagonal blocks
+    """
+    # Get layer indices for rows and columns
+    layer_row = indices[0] // n
+    layer_col = indices[1] // n
+    
+    # Indices are in diagonal blocks if they're in the same layer
+    return layer_row == layer_col
+
+
+"""
+Centrality measures are used to identify the most important nodes in a network.
+"""
+# Versatility
+
+def compute_indegree(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
+    """
+    Compute indegree for each node replica in a multilayer network.
+    
+    This function computes the number of incoming edges for each node in each layer,
+    treating each (node, layer) combination as a separate entity. Only considers
+    intra-layer connections (diagonal blocks).
+    
+    Args:
+        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N*L, N*L)
+        n (int): Number of nodes per layer
+        l (int): Number of layers
+        
+    Returns:
+        torch.Tensor: Tensor of shape (N, L) where entry [i,j] is the indegree
+            of node i in layer j
+            
+    Note:
+        For aggregated indegree across layers, use compute_aggregated_indegree() 
+        which is more efficient.
+    """
+    # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
+    indices = supra_adjacency_matrix.indices()
+    values = supra_adjacency_matrix.values()
+
+    # Find which indices are in diagonal blocks
+    diagonal_mask = is_in_diagonal_block(indices, n)
+
+    # Filter indices and values
+    diagonal_indices = indices[:, diagonal_mask]
+    diagonal_values = values[diagonal_mask]
+
+    # Create binary values for degree calculation
+    binary_values = torch.ones_like(diagonal_values)
+
+    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
+    # indices within layers. Compute indegree for each layer simultaneously
+    node_indegrees = torch.zeros((n, l), device=supra_adjacency_matrix.device)
+    
+    # Get target layer indices and node indices within layers
+    target_layer_indices = diagonal_indices[1] // n  # Which layer the target node is in
+    target_node_indices = diagonal_indices[1] % n    # Which node within that layer
+    
+    # Create combined indices for scatter_add: [node_idx * l + layer_idx]
+    combined_indices = target_node_indices * l + target_layer_indices
+    
+    # Flatten the node_indegrees tensor and use scatter_add
+    node_indegrees_flat = node_indegrees.view(-1)
+    node_indegrees_flat.scatter_add_(0, combined_indices, binary_values)
+    
+    # Reshape back to (n, l)
+    node_indegrees = node_indegrees_flat.view(n, l)
+    print("Indegrees computed for each layer:", node_indegrees)
+    return node_indegrees
+
+def compute_indegree_for_layer(supra_adjacency_matrix: torch.Tensor, layer_index: int, n: int, l: int) -> torch.Tensor:
+    """
+    Compute indegree for a specific layer in a multilayer network.
+    
+    Args:
+        supra_adjacency_matrix: Sparse tensor of shape (N*L, N*L)
+        layer_index: Index of the layer to compute indegree for
+        n: Number of nodes per layer
+        l: Number of layers
+        
+    Returns:
+        Tensor of shape (N,) containing indegrees for the specified layer
+    """
+    print(f"Computing indegree for layer {layer_index} with n={n}, l={l}")
+    if layer_index < 0 or layer_index >= l:
+        raise ValueError(f"Layer index {layer_index} is out of bounds for {l} layers.")
+    
+    # Calculate the start and end indices for the layer
+    start_index = layer_index * n
+    end_index = start_index + n
+
+    if supra_adjacency_matrix.is_sparse:
+        # Get sparse indices and values
+        supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
+        indices = supra_adjacency_matrix.indices()
+        values = supra_adjacency_matrix.values()
+    else:
+        raise NotImplementedError("Supra-adjacency matrix must be a sparse tensor.")
+    
+    # Create a mask for the specified layer
+    layer_mask = (indices[0] >= start_index) & (indices[0] < end_index) & (indices[1] >= start_index) & (indices[1] < end_index)
+    
+    # Filter indices and values for the specified layer
+    layer_indices = indices[:, layer_mask]
+    layer_values = values[layer_mask]
+
+    # Create binary values for degree calculation
+    binary_values = torch.ones_like(layer_values)
+    print(binary_values)
+
+    node_indegrees = torch.zeros(n, device=supra_adjacency_matrix.device)
+    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
+    # indices within layers. 
+    node_indices = layer_indices[1] % n
+    
+    # Accumulate degrees
+    node_indegrees.index_add_(0, node_indices, binary_values)
+    return node_indegrees
+
+def compute_instrength(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
+    """
+    Compute indegree for each node replica in a multilayer network.
+    
+    This function computes the number of incoming edges for each node in each layer,
+    treating each (node, layer) combination as a separate entity. Only considers
+    intra-layer connections (diagonal blocks).
+    
+    Args:
+        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N*L, N*L)
+        n (int): Number of nodes per layer
+        l (int): Number of layers
+        
+    Returns:
+        torch.Tensor: Tensor of shape (N, L) where entry [i,j] is the indegree
+            of node i in layer j
+            
+    Note:
+        For aggregated indegree across layers, use compute_aggregated_indegree() 
+        which is more efficient.
+    """
+    # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
+    indices = supra_adjacency_matrix.indices()
+    values = supra_adjacency_matrix.values()
+
+    # Find which indices are in diagonal blocks
+    diagonal_mask = is_in_diagonal_block(indices, n)
+
+    # Filter indices and values
+    diagonal_indices = indices[:, diagonal_mask]
+    diagonal_values = values[diagonal_mask]
+
+    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
+    # indices within layers. Compute indegree for each layer simultaneously
+    node_indegrees = torch.zeros((n, l), device=supra_adjacency_matrix.device)
+    
+    # Get target layer indices and node indices within layers
+    target_layer_indices = diagonal_indices[1] // n  # Which layer the target node is in
+    target_node_indices = diagonal_indices[1] % n    # Which node within that layer
+    
+    # Create combined indices for scatter_add: [node_idx * l + layer_idx]
+    combined_indices = target_node_indices * l + target_layer_indices
+    
+    # Flatten the node_indegrees tensor and use scatter_add
+    node_instrengths_flat = node_indegrees.view(-1)
+    node_instrengths_flat.scatter_add_(0, combined_indices, diagonal_values)
+    
+    # Reshape back to (n, l)
+    node_instrengths = node_instrengths_flat.view(n, l)
+    print("Instrengths computed for each layer:", node_instrengths)
+    return node_instrengths
+
+def compute_outdegree(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
+    """
+    Compute the outdegree of each node, considering them as replica nodes in a multilayer network.
+
+    Args:
+        supra_adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.
+
+    Returns:
+        torch.Tensor: A tensor of shape (N * L) containing the outdegree of each node.
+    """
+       # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
+    indices = supra_adjacency_matrix.indices()
+    values = supra_adjacency_matrix.values()
+
+    # Find which indices are in diagonal blocks
+    diagonal_mask = is_in_diagonal_block(indices, n)
+
+    # Filter indices and values
+    diagonal_indices = indices[:, diagonal_mask]
+    diagonal_values = values[diagonal_mask]
+
+    # Create binary values for degree calculation
+    binary_values = torch.ones_like(diagonal_values)
+
+    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
+    # indices within layers. Compute indegree for each layer simultaneously
+    node_outdegrees = torch.zeros((n, l), device=supra_adjacency_matrix.device)
+    
+    # Get target layer indices and node indices within layers
+    target_layer_indices = diagonal_indices[0] // n  # Which layer the target node is in
+    target_node_indices = diagonal_indices[0] % n    # Which node within that layer
+    
+    # Create combined indices for scatter_add: [node_idx * l + layer_idx]
+    combined_indices = target_node_indices * l + target_layer_indices
+    
+    # Flatten the node_outdegrees tensor and use scatter_add
+    node_outdegrees_flat = node_outdegrees.view(-1)
+    node_outdegrees_flat.scatter_add_(0, combined_indices, binary_values)
+    
+    # Reshape back to (n, l)
+    node_outdegrees = node_outdegrees_flat.view(n, l)
+    print("Outdegrees computed for each layer:", node_outdegrees)
+    return node_outdegrees
+
+def compute_outstrength(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
+    """
+    Compute the outstrength of each node, considering them as replica nodes in a multilayer network.
+
+    Args:
+        supra_adjacency_matrix (torch.Tensor): The supra-adjacency matrix of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.
+
+    Returns:
+        torch.Tensor: A tensor of shape (N * L) containing the outstrength of each node.
+    """
+    # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
+    indices = supra_adjacency_matrix.indices()
+    values = supra_adjacency_matrix.values()
+
+    # Find which indices are in diagonal blocks
+    diagonal_mask = is_in_diagonal_block(indices, n)
+
+    # Filter indices and values
+    diagonal_indices = indices[:, diagonal_mask]
+    diagonal_values = values[diagonal_mask]
+
+    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
+    # indices within layers. Compute indegree for each layer simultaneously
+    node_outdegrees = torch.zeros((n, l), device=supra_adjacency_matrix.device)
+    
+    # Get target layer indices and node indices within layers
+    target_layer_indices = diagonal_indices[0] // n  # Which layer the target node is in
+    target_node_indices = diagonal_indices[0] % n    # Which node within that layer
+    
+    # Create combined indices for scatter_add: [node_idx * l + layer_idx]
+    combined_indices = target_node_indices * l + target_layer_indices
+    
+    # Flatten the node_outdegrees tensor and use scatter_add
+    node_outdegrees_flat = node_outdegrees.view(-1)
+    node_outdegrees_flat.scatter_add_(0, combined_indices, diagonal_values)
+    
+    # Reshape back to (n, l)
+    node_outdegrees = node_outdegrees_flat.view(n, l)
+    print("Outdegrees computed for each layer:", node_outdegrees)
+    return node_outdegrees
+
+def compute_multi_indegree(supra_adjacency_matrix: torch.Tensor, n:int, l: int) -> torch.Tensor:
+    """
+    Memory-efficient computation of multi-indegree for non-diagonal blocks.
+    
+    Args:
+        supra_adjacency_matrix: Sparse tensor of shape (N*L, N*L)
+        n: Number of nodes per layer
+        l: Number of layers
+        
+    Returns:
+        Tensor of shape (N,) containing multi-indegrees
+    """
+    # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
+    indices = supra_adjacency_matrix.indices()
+    values = supra_adjacency_matrix.values()
+
+    # Find which indices are in diagonal blocks
+    not_diagonal_mask = ~is_in_diagonal_block(indices, n)
+
+    # Filter indices and values
+    not_diagonal_indices = indices[:, not_diagonal_mask]
+    not_diagonal_values = values[not_diagonal_mask]
+
+    # Create binary values for degree calculation
+    binary_values = torch.ones_like(not_diagonal_values)
+
+    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
+    # indices within layers. Compute indegree for each layer simultaneously
+    node_indegrees = torch.zeros((n, l), device=supra_adjacency_matrix.device)
+    
+    # Get target layer indices and node indices within layers
+    target_layer_indices = not_diagonal_indices[1] // n  # Which layer the target node is in
+    target_node_indices = not_diagonal_indices[1] % n    # Which node within that layer
+    
+    # Create combined indices for scatter_add: [node_idx * l + layer_idx]
+    combined_indices = target_node_indices * l + target_layer_indices
+    
+    # Flatten the node_indegrees tensor and use scatter_add
+    node_indegrees_flat = node_indegrees.view(-1)
+    node_indegrees_flat.scatter_add_(0, combined_indices, binary_values)
+    
+    # Reshape back to (n, l)
+    node_indegrees = node_indegrees_flat.view(n, l)
+    print("Indegrees computed for each layer:", node_indegrees)
+    return node_indegrees
+
+def compute_multi_instrength(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
+    """
+    Memory-efficient computation of multi-instrength for non-diagonal blocks.
+    
+    Args:
+        supra_adjacency_matrix: Sparse tensor of shape (N*L, N*L)
+        n: Number of nodes per layer
+        l: Number of layers
+        
+    Returns:
+        Tensor of shape (N*L,) containing multi-instrengths
+    """
+    # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
+    indices = supra_adjacency_matrix.indices()
+    values = supra_adjacency_matrix.values()
+
+    # Find which indices are in diagonal blocks
+    not_diagonal_mask = ~is_in_diagonal_block(indices, n)
+
+    # Filter indices and values
+    not_diagonal_indices = indices[:, not_diagonal_mask]
+    not_diagonal_values = values[not_diagonal_mask]
+
+    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
+    # indices within layers. Compute indegree for each layer simultaneously
+    node_indegrees = torch.zeros((n, l), device=supra_adjacency_matrix.device)
+    
+    # Get target layer indices and node indices within layers
+    target_layer_indices = not_diagonal_indices[1] // n  # Which layer the target node is in
+    target_node_indices = not_diagonal_indices[1] % n    # Which node within that layer
+    
+    # Create combined indices for scatter_add: [node_idx * l + layer_idx]
+    combined_indices = target_node_indices * l + target_layer_indices
+    
+    # Flatten the node_indegrees tensor and use scatter_add
+    node_indegrees_flat = node_indegrees.view(-1)
+    node_indegrees_flat.scatter_add_(0, combined_indices, not_diagonal_values)
+    
+    # Reshape back to (n, l)
+    node_indegrees = node_indegrees_flat.view(n, l)
+    print("Indegrees computed for each layer:", node_indegrees)
+    return node_indegrees
+    
+def compute_multi_outdegree(supra_adjacency_matrix, n, l):
+    """
+    Memory-efficient computation of multi-outdegree for non-diagonal blocks.
+
+    Args:
+        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.
+        
+    Returns:
+        torch.Tensor: A tensor of shape (N,) containing multi-outdegrees.
+    """
+        # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
+    indices = supra_adjacency_matrix.indices()
+    values = supra_adjacency_matrix.values()
+
+    # Find which indices are in diagonal blocks
+    not_diagonal_mask = ~is_in_diagonal_block(indices, n)
+
+    # Filter indices and values
+    not_diagonal_indices = indices[:, not_diagonal_mask]
+    not_diagonal_values = values[not_diagonal_mask]
+
+    # Create binary values for degree calculation
+    binary_values = torch.ones_like(not_diagonal_values)
+
+    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
+    # indices within layers. Compute indegree for each layer simultaneously
+    node_outdegrees = torch.zeros((n, l), device=supra_adjacency_matrix.device)
+    
+    # Get target layer indices and node indices within layers
+    target_layer_indices = not_diagonal_indices[0] // n  # Which layer the target node is in
+    target_node_indices = not_diagonal_indices[0] % n    # Which node within that layer
+    
+    # Create combined indices for scatter_add: [node_idx * l + layer_idx]
+    combined_indices = target_node_indices * l + target_layer_indices
+    
+    # Flatten the node_indegrees tensor and use scatter_add
+    node_outdegrees_flat = node_outdegrees.view(-1)
+    node_outdegrees_flat.scatter_add_(0, combined_indices, binary_values)
+    
+    # Reshape back to (n, l)
+    node_outdegrees = node_outdegrees_flat.view(n, l)
+    print("Outdegrees computed for each layer:", node_outdegrees)
+    return node_outdegrees
+
+def compute_multi_outstrength(supra_adjacency_matrix, n, l):
+    """
+    Memory-efficient computation of multi-outstrength for non-diagonal blocks.
+
+    Args:
+        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N * L, N * L).
+        n (int): Number of nodes.
+        l (int): Number of layers.
+        
+    Returns:
+        torch.Tensor: A tensor of shape (N * L,) containing multi-outstrengths.
+    """
+    # Get sparse indices and values
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
+    indices = supra_adjacency_matrix.indices()
+    values = supra_adjacency_matrix.values()
+
+    # Find which indices are in diagonal blocks
+    not_diagonal_mask = ~is_in_diagonal_block(indices, n)
+
+    # Filter indices and values
+    not_diagonal_indices = indices[:, not_diagonal_mask]
+    not_diagonal_values = values[not_diagonal_mask]
+
+    # In-edges are rowsum, i take the column indices of the diagonal blocks and compute their node 
+    # indices within layers. Compute indegree for each layer simultaneously
+    node_outstrengths = torch.zeros((n, l), device=supra_adjacency_matrix.device)
+    
+    # Get target layer indices and node indices within layers
+    target_layer_indices = not_diagonal_indices[0] // n  # Which layer the target node is in
+    target_node_indices = not_diagonal_indices[0] % n    # Which node within that layer
+
+    # Create combined indices for scatter_add: [node_idx * l + layer_idx]
+    combined_indices = target_node_indices * l + target_layer_indices
+
+    # Flatten the node_outstrengths tensor and use scatter_add
+    node_outstrengths_flat = node_outstrengths.view(-1)
+    node_outstrengths_flat.scatter_add_(0, combined_indices, not_diagonal_values)
+
+    # Reshape back to (n, l)
+    node_outstrengths = node_outstrengths_flat.view(n, l)
+    print("Outstrengths computed for each layer:", node_outstrengths)
+    return node_outstrengths
+
+# K-coreness
+#TODO
+
+# Eigenvector versatility
+def compute_katz_centrality(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
+    """
+    Compute the eigenvector versatility for each node in a multilayer network.
+    From Manlio et al. "Multilayer network science"
+    << Eigenvector centrality is a measure of influence of the single nodes in a network. 
+    A particular node has a high eigenvector centrality score when its neighbors have high score themselves.
+    In the monoplex case, the recursive character of this definitn is untangled by the eigenvalue problem.
+    In the multilayer case, the eigenvector centrality is defined as the solution of the generalized eigenvalue problem.
+        Wx = lambda1 x
+    Where lambda1 is the largest eigenvalue of W and the element x represent the centrality score of the node i
+    If W is positive and symmetric, then the Perron-Fobrenius theorem grants the existence and uniqueness of this vecotr.
+
+    An extension to multilayer network is obtained as:
+
+       \sum_{i,\alpha} M_{j\beta}^{i\\alpha} \\Sigma_{i\\alpha} = \lambda1\ \Sigma_{j\beta}
+
+    Where \lambda1 is the largest eigenvalue of M and \Sigma is teh corresponding eigentensor, whose values represent the centrality of
+    each node in each layer.
+    Thus, the eigenvector centraily consists in:
+
+       \Sigma_{j\beta} = \lambda_1^{-1} \sum_{i,\alpha} M_{j\beta}^{i\alpha} \Sigma_{i\alpha}
+
+    Which represents the multilayer generalization of Bonacich's eigenvector centrality per node per layer. By summing
+    up the scores of a node across ll the layers, eigenvector versatility can be condensed across layers: \sigma_i = \sum_{\alpha} \Sigma_{i\alpha}
+    
+    In case of directed netwokr we refer to the KATZ versatility. This overcome some issues when outgoing edges are not
+    present for some nodes. Katz assigns to each node a minimum value of centrality redefining the previous as:
+
+        \sum_{i\alpha} (aM_{j\beta}^{i\alpha}) \Sigma_{i\alpha} + 1) = \Sigma_{j\beta}
+
+    >>
+    """
+    supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
+    indexes = supra_adjacency_matrix.indices()
+    binary_values = torch.ones_like(supra_adjacency_matrix.values())
+
+    supra_adjacency_matrix = sp.sparse.coo_matrix(
+        (binary_values.cpu().numpy(),
+        (indexes[0].cpu().numpy(), indexes[1].cpu().numpy())),
+        shape=(n*l, n*l)
+    )
+    eigen = sp.sparse.linalg.eigs(supra_adjacency_matrix.T)
+    leading_eigenvalue = eigen[0][0].real
+    print("Eigenvalues:", leading_eigenvalue)
+
+    # compute the kronecker product of the sparse diagonal matrix of N entries and sparse diagonal matrix of L entries
+    delta = sp.sparse.kron(sp.sparse.eye(n), sp.sparse.eye(l))
+    print("Delta shape:", delta.shape)
+
+    # This ensures convergence of the Katz kernel tensor
+    a = 0.99999 / abs(leading_eigenvalue)
+
+    # Katzkernel tensor
+    katz_kernel = sp.sparse.linalg.inv(delta - a*supra_adjacency_matrix)
+    print("Katz kernel shape:", katz_kernel.shape)
+
+    # katz centrality supra vector
+    katz_centrality = katz_kernel @ np.ones(n*l, dtype=np.float32)
+    print("Katz centrality shape:", katz_centrality.shape)
+    # Reshape to (n, l)
+    katz_centrality = katz_centrality.reshape(n, l)
+    print("Katz centrality reshaped:", katz_centrality.shape)
+
+    # Sum across layers to get the overall versatility
+    katz_centrality = katz_centrality.sum(axis=1)
+    print("Katz centrality summed across layers:", katz_centrality.shape)
+
+    centrality = katz_centrality / max(katz_centrality)
+    return centrality
+
+def compute_multipagerank_centrality(supra_adjacency_matrix: torch.Tensor, n: int, l: int, alpha: float = 0.85) -> torch.Tensor:
+    """
+    Compute the multipagerank centrality for each node in a multilayer network.
+    
+    Args:
+        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N*L, N*L)
+        n (int): Number of nodes per layer
+        l (int): Number of layers
+        alpha (float): Damping factor for PageRank, typically between 0 and 1
+        
+    Returns:
+        torch.Tensor: Tensor of shape (N,) containing multipagerank centrality for each node
+    """
+    pass
+
+def compute_betweenness_centrality(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> torch.Tensor:
+    """
+    Given the existence of lazers, it is possible to select a subset of lazers and consider onlz the paths 
+    belonging to that subset, defining the cross between centrality of the node i as:
+        
+        CBC(i,\alpha,\Omega) = \sum_{o\neq i,d\neq i,\beta\in\Omega,\beta\neq\beta'} \frac{\sigma_{o\beta}^{d\beta'}(i,\alpha)}{\sigma\}
+        
+    Where CBC counts the fraction of interlayer shortest paths, having their destination in \Omega, that pass through node i of layer \alpha. 
+
+    Therefore, the multiplex betweenness centrality (BC) can be decomposed into the following contributions:
+
+        BC(i,\alpha) = CBC(i,\alpha,\Omega) + CBC(i,\alpha,\bar{\Omega}) + IBC(i,\alpha)
+
+    Where \bar{\Omega} indicates the layers that do not belong to the subset \Omega, and IBC(i,\alpha) is the interlayer betweenness centrality of node i in layer \alpha, defined as:
+
+        IBC(i,\alpha) = \sum_{o\neq i,d\neq i,\alpha=\beta=\beta'} \frac{\sigma_{o\beta}^{d\beta'}(i,\alpha)}{\sigma}
+        
+    Compute the betweenness centrality for each node in a multilayer network.
+    
+    Args:
+        supra_adjacency_matrix (torch.Tensor): Sparse tensor of shape (N*L, N*L)
+        n (int): Number of nodes per layer
+        l (int): Number of layers
+        
+    Returns:
+        torch.Tensor: Tensor of shape (N,) containing betweenness centrality for each node
+    """
+
+
 """
 Clustering coefficients are useful measures of transitivity in networks.
 The local clustering coefficient of a node is the number of existing edges among the set of its neighboring nodes
@@ -773,3 +790,85 @@ def compute_average_global_clustering(supra_adjacency_matrix: torch.Tensor, n: i
 def compute_local_clustering_coefficient(supra_adjacency_matrix: torch.Tensor, node_index: int, layer_index: int, n: int, l: int) -> float:
     f_matrix = torch.ones(n*l, n*l, dtype=torch.float32, device=supra_adjacency_matrix.device) - torch.eye(n*l, dtype=torch.float32, device=supra_adjacency_matrix.device)
     #
+
+if __name__ == "__main__":
+    n, l = 10, 3
+    matrix_size = n * l  # 30x30 matrix
+    
+    # Define a comprehensive set of non-zero entries for realistic testing
+    # This includes intra-layer, inter-layer, and various weight patterns
+    entries = [
+        # Layer 0 intra-connections (nodes 0-9 in layer 0 -> indices 0,3,6,9,12,15,18,21,24,27)
+        (0,1,1),(0,2,1),(0,4,1),(0,5,1),(0,7,1),
+        (1,0,1),(1,3,1),(1,6,1),
+        (2,0,1),(2,3,1),(2,4,1),(2,9,1),
+        (3,1,1),(3,2,1),(3,4,1),(3,5,1),(3,7,1),(3,8,1),(3,9,1),
+        (4,0,1),(4,2,1),(4,3,1),(4,5,1),(4,6,1),(4,7,1),
+        (5,0,1),(5,3,1),(5,4,1),(5,6,1),(5,8,1),(5,9,1),
+        (6,1,1),(6,4,1),(6,5,1),(6,8,1),(6,9,1),
+        (7,0,1),(7,3,1),(7,4,1),
+        (8,3,1),(8,5,1),(8,6,1),(8,9,1),
+        (9,2,1),(9,3,1),(9,5,1),(9,6,1),(9,8,1),
+        # Layer 1 intra-connections (nodes 0-9 in layer 1 -> indices 1,4,7,10,13,16,19,22,25,28)
+        (10,11,1),(10,13,1),(10,17,1),
+        (11,10,1),(11,13,1),(11,16,1),(11,19,1),
+        (12,13,1),(12,14,1),(12,16,1),(12,18,1),(12,19,1),
+        (13,10,1),(13,11,1),(13,12,1),(13,14,1),(13,16,1),(13,18,1),
+        (14,12,1),(14,13,1),(14,15,1),(14,16,1),
+        (15,14,1),(15,17,1),(15,19,1),
+        (16,11,1),(16,12,1),(16,13,1),(16,14,1),(16,17,1),(16,19,1),
+        (17,10,1),(17,15,1),(17,16,1),(17,18,1),
+        (18,12,1),(18,13,1),(18,17,1),(18,19,1),
+        (19,11,1),(19,12,1),(19,15,1),(19,16,1),(19,18,1),
+        # Layer 2 intra-connections (nodes 0-9 in layer 2 -> indices 2,5,8,11,14,17,20,23,26,29)
+        (20,21,1),(20,23,1),(20,25,1),(20,26,1),(20,28,1),
+        (21,20,1),(21,22,1),(21,24,1),(21,25,1),(21,26,1),(21,27,1),
+        (22,21,1),(22,23,1),(22,25,1),(22,27,1),(22,28,1),
+        (23,20,1),(23,22,1),
+        (24,21,1),(24,26,1),(24,28,1),
+        (25,20,1),(25,21,1),(25,22,1),(25,28,1),(25,29,1),
+        (26,20,1),(26,21,1),(26,24,1),
+        (27,21,1),(27,22,1),
+        (28,20,1),(28,22,1),(28,24,1),(28,25,1),
+        (29,25,1),
+        # Inter-layer connections (node i in layer j to node i in layer k)
+        # Node 0: layer connections
+        (0,10,1),(0,20,1),(10,0,1),(20,0,1),(10,20,1),(20,10,1),
+        # Node 1: layer connections
+        (1,11,1),(1,21,1),(11,1,1),(21,1,1),(11,21,1),(21,11,1),
+        # Node 2: layer connections
+        (2,12,1),(2,22,1),(12,2,1),(22,2,1),(12,22,1),(22,12,1),
+        # Node 3: layer connections
+        (3,13,1),(3,23,1),(13,3,1),(23,3,1),(13,23,1),(23,13,1),
+        # Node 4: layer connections
+        (4,14,1),(4,24,1),(14,4,1),(24,4,1),(14,24,1),(24,14,1),
+        # Node 5: layer connections
+        (5,15,1),(5,25,1),(15,5,1),(25,5,1),(15,25,1),(25,15,1),
+        # Node 6: layer connections
+        (6,16,1),(6,26,1),(16,6,1),(26,6,1),(16,26,1),(26,16,1),
+        # Node 7: layer connections
+        (7,17,1),(7,27,1),(17,7,1),(27,7,1),(17,27,1),(27,17,1),
+        # Node 8: layer connections
+        (8,18,1),(8,28,1),(18,8,1),(28,8,1),(18,28,1),(28,18,1),
+        # Node 9: layer connections
+        (9,19,1),(9,29,1),(19,9,1),(29,9,1),(19,29,1),(29,19,1),
+    ]
+    
+    # Separate indices and values
+    indices = torch.tensor([[entry[0] for entry in entries],
+                        [entry[1] for entry in entries]], dtype=torch.long)
+    values = torch.tensor([entry[2] for entry in entries], dtype=torch.float32)
+    
+    # Create sparse COO tensor
+    sparse_matrix = torch.sparse_coo_tensor(
+        indices=indices,
+        values=values,
+        size=(matrix_size, matrix_size),
+        dtype=torch.float32
+    ).coalesce()
+
+
+    # Test single metric
+    nodes_katz_centrality = compute_katz_centrality(sparse_matrix, n, l)
+    print("Katz centrality for each node:", nodes_katz_centrality)
+    

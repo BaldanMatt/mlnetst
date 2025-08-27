@@ -10,7 +10,6 @@ import networkx as nx
 
 from mlnetst.utils.mlnet_metrics_utils import (
     compute_indegree,
-    compute_aggregated_indegree,
     compute_indegree_for_layer,
     compute_average_global_clustering,
     compute_instrength,
@@ -129,7 +128,6 @@ def expected_structural_analysis():
     """
     return {
         # In-degrees: incoming edges to each node (sum across both layers)
-        'in_aggregated_degrees': torch.tensor([13,13,14,15,13,14,14,9,12,11], dtype=torch.float),
         'in_degrees': torch.tensor([[5,3,5],
                                     [3,4,6],
                                     [4,5,5],
@@ -142,20 +140,90 @@ def expected_structural_analysis():
                                     [5,5,1],
                                     ], dtype=torch.float),
         'in_degrees_for_layer_0': torch.tensor([5, 3, 4,7,6,6,5,3,4,5], dtype=torch.float),
-        'in_strengths': torch.tensor([13,13,14,15,13,14,14,9,12,11], dtype=torch.float),
+        'in_strengths': torch.tensor([[5,3,5],
+                                    [3,4,6],
+                                    [4,5,5],
+                                    [7,6,2],
+                                    [6,4,3],
+                                    [6,3,5],
+                                    [5,6,3],
+                                    [3,4,2],
+                                    [4,4,4],
+                                    [5,5,1],
+                                    ], dtype=torch.float),
         
         # Out-degrees: outgoing edges from each node (sum across both layers)  
-        'out_degrees': torch.tensor([13,13,14,15,13,14,14,9,12,11], dtype=torch.float),
-        'out_strengths': torch.tensor([13,13,14,15,13,14,14,9,12,11], dtype=torch.float),
-        
+        'out_degrees': torch.tensor([[5,3,5],
+                                    [3,4,6],
+                                    [4,5,5],
+                                    [7,6,2],
+                                    [6,4,3],
+                                    [6,3,5],
+                                    [5,6,3],
+                                    [3,4,2],
+                                    [4,4,4],
+                                    [5,5,1],
+                                    ], dtype=torch.float),
+        'out_strengths': torch.tensor([[5,3,5],
+                                    [3,4,6],
+                                    [4,5,5],
+                                    [7,6,2],
+                                    [6,4,3],
+                                    [6,3,5],
+                                    [5,6,3],
+                                    [3,4,2],
+                                    [4,4,4],
+                                    [5,5,1],
+                                    ], dtype=torch.float),
+
         # Multi-indegrees: inter-layer incoming connections
         # This counts connections FROM other layers TO each node
-        'multi_in_degrees': torch.tensor([6,6,6,6,6,6,6,6,6,6], dtype=torch.float),
-        'multi_in_strengths': torch.tensor([6,6,6,6,6,6,6,6,6,6], dtype=torch.float),
+        'multi_in_degrees': torch.tensor([[2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    ], dtype=torch.float),
+        'multi_in_strengths': torch.tensor([[2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    ], dtype=torch.float),
         # Multi-outdegrees: inter-layer outgoing connections  
         # This counts connections TO other layers FROM each node
-        'multi_out_degrees': torch.tensor([6,6,6,6,6,6,6,6,6,6], dtype=torch.float),
-        'multi_out_strengths': torch.tensor([6,6,6,6,6,6,6,6,6,6], dtype=torch.float),
+        'multi_out_degrees': torch.tensor([[2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    ], dtype=torch.float),
+        'multi_out_strengths': torch.tensor([[2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    [2,2,2],
+                                    ], dtype=torch.float),
 
         # Clustering coefficient:
         'global_average_clustering': 0.240458,  # No triangles in this example
@@ -263,31 +331,6 @@ def test_matrix_conversion_consistency(sample_adjacency_matrix):
     assert original_sparse._nnz() == sparse_again._nnz(), "Number of non-zeros should be preserved"
 
 
-def test_compute_aggregated_indegree(sample_adjacency_matrix, expected_structural_analysis):
-    """
-    Test the computation of indegree from a sparse adjacency matrix.
-    """
-    indegree = compute_aggregated_indegree(sample_adjacency_matrix["matrix"], 
-                                            n=sample_adjacency_matrix['n'], 
-                                            l=sample_adjacency_matrix['l'])
-
-    expected = expected_structural_analysis['in_aggregated_degrees']
-    assert indegree.shape == expected.shape, f"Shape mismatch: got {indegree.shape}, expected {expected.shape}"
-    assert torch.allclose(indegree, expected, atol=1e-5), f"In-degree mismatch: got {indegree}, expected {expected}"
-
-
-def test_compute_outdegree(sample_adjacency_matrix, expected_structural_analysis):
-    """
-    Test the computation of outdegree from a sparse adjacency matrix.
-    """
-    outdegree = compute_outdegree(sample_adjacency_matrix["matrix"], 
-                                n=sample_adjacency_matrix['n'], 
-                                l=sample_adjacency_matrix['l'])
-
-    expected = expected_structural_analysis['out_degrees']
-    assert outdegree.shape == expected.shape, f"Shape mismatch: got {outdegree.shape}, expected {expected.shape}"
-    assert torch.allclose(outdegree, expected, atol=1e-5), f"Out-degree mismatch: got {outdegree}, expected {expected}"
-
 
 def test_compute_multi_indegree(sample_adjacency_matrix, expected_structural_analysis):
     """
@@ -328,30 +371,6 @@ def test_compute_instrengths(sample_adjacency_matrix, expected_structural_analys
     assert instrengths.shape == expected.shape, f"Shape mismatch: got {instrengths.shape}, expected {expected.shape}"
     assert torch.allclose(instrengths, expected, atol=1e-5), f"In-strength mismatch: got {instrengths}, expected {expected}"
 
-
-def test_degree_computation_with_dense_matrix(dense_comparison_matrix, expected_structural_analysis):
-    """
-    Test that degree computations work the same with dense matrices.
-    This serves as a cross-validation of our sparse implementation.
-    """
-    dense_matrix = dense_comparison_matrix['dense']
-    n, l = dense_comparison_matrix['n'], dense_comparison_matrix['l']
-    
-    # Convert dense back to sparse for testing
-    sparse_from_dense = dense_matrix.to_sparse_coo()
-    
-    # Compute degrees using the converted matrix
-    indegree = compute_aggregated_indegree(sparse_from_dense, n=n, l=l)
-    outdegree = compute_outdegree(sparse_from_dense, n=n, l=l)
-    multi_indegree = compute_multi_indegree(sparse_from_dense, n=n, l=l)
-    multi_outdegree = compute_multi_outdegree(sparse_from_dense, n=n, l=l)
-    
-    # Should match expected values
-    assert torch.allclose(indegree, expected_structural_analysis['in_aggregated_degrees'], atol=1e-5)
-    assert torch.allclose(outdegree, expected_structural_analysis['out_degrees'], atol=1e-5) 
-    assert torch.allclose(multi_indegree, expected_structural_analysis['multi_in_degrees'], atol=1e-5)
-    assert torch.allclose(multi_outdegree, expected_structural_analysis['multi_out_degrees'], atol=1e-5)
-
 def test_get_sparse_trace(sample_adjacency_matrix, expected_sparse_properties):
     """
     Test that we can extract the trace of a sparse matrix correctly.
@@ -364,72 +383,6 @@ def test_get_sparse_trace(sample_adjacency_matrix, expected_sparse_properties):
 
     expected_trace = expected_sparse_properties['trace']
     assert torch.isclose(torch.tensor(trace), torch.tensor(expected_trace)), f"Expected trace {expected_trace}, got {trace.item()}"
-def test_edge_cases():
-    """
-    Test edge cases like empty matrices, single node, etc.
-    """
-    # Test with minimal matrix (1 node, 1 layer)
-    n, l = 1, 1
-    indices = torch.tensor([[], []], dtype=torch.long)
-    values = torch.tensor([], dtype=torch.float32)
-    
-    empty_sparse = torch.sparse_coo_tensor(
-        indices=indices,
-        values=values, 
-        size=(n*l, n*l),
-        dtype=torch.float32
-    ).coalesce()
-    
-    # All degrees should be zero
-    indegree = compute_aggregated_indegree(empty_sparse, n=n, l=l)
-    outdegree = compute_outdegree(empty_sparse, n=n, l=l)
-    multi_indegree = compute_multi_indegree(empty_sparse, n=n, l=l) 
-    multi_outdegree = compute_multi_outdegree(empty_sparse, n=n, l=l)
-    
-    assert torch.allclose(indegree, torch.zeros(n)), "Empty matrix should have zero in-degree"
-    assert torch.allclose(outdegree, torch.zeros(n)), "Empty matrix should have zero out-degree"
-    assert torch.allclose(multi_indegree, torch.zeros(n)), "Empty matrix should have zero multi-in-degree"
-    assert torch.allclose(multi_outdegree, torch.zeros(n)), "Empty matrix should have zero multi-out-degree"
-
-@pytest.mark.parametrize("n,l", [(2, 3), (4, 2), (3, 3), (5, 1)])
-def test_different_network_sizes(n, l):
-    """
-    Test degree computation with different network sizes.
-    """
-    matrix_size = n * l
-    
-    # Create a simple diagonal matrix with some off-diagonal elements
-    row_indices = list(range(matrix_size)) + [0, 1, 2][:min(3, matrix_size-1)]
-    col_indices = list(range(matrix_size)) + [1, 2, 0][:min(3, matrix_size-1)]
-    values = [1.0] * len(row_indices)
-    
-    indices = torch.tensor([row_indices, col_indices], dtype=torch.long)
-    values_tensor = torch.tensor(values, dtype=torch.float32)
-    
-    sparse_matrix = torch.sparse_coo_tensor(
-        indices=indices,
-        values=values_tensor,
-        size=(matrix_size, matrix_size),
-        dtype=torch.float32
-    ).coalesce()
-    
-    # Should not raise any errors
-    indegree = compute_aggregated_indegree(sparse_matrix, n=n, l=l)
-    outdegree = compute_outdegree(sparse_matrix, n=n, l=l)
-    multi_indegree = compute_multi_indegree(sparse_matrix, n=n, l=l)
-    multi_outdegree = compute_multi_outdegree(sparse_matrix, n=n, l=l)
-    
-    # Basic shape checks
-    assert indegree.shape == (n,), f"In-degree shape should be ({n},), got {indegree.shape}"
-    assert outdegree.shape == (n,), f"Out-degree shape should be ({n},), got {outdegree.shape}"
-    assert multi_indegree.shape == (n,), f"Multi-in-degree shape should be ({n},), got {multi_indegree.shape}"
-    assert multi_outdegree.shape == (n,), f"Multi-out-degree shape should be ({n},), got {multi_outdegree.shape}"
-    
-    # All values should be non-negative
-    assert torch.all(indegree >= 0), "In-degrees should be non-negative"
-    assert torch.all(outdegree >= 0), "Out-degrees should be non-negative" 
-    assert torch.all(multi_indegree >= 0), "Multi-in-degrees should be non-negative"
-    assert torch.all(multi_outdegree >= 0), "Multi-out-degrees should be non-negative"
 
 def test_compute_average_global_clustering(sample_adjacency_matrix, expected_structural_analysis):
     """

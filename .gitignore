@@ -254,3 +254,4 @@ fabric.properties
 # This project stuff
 data/
 media/
+container/*.sif
