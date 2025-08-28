@@ -326,7 +326,7 @@ def compute_outdegree(supra_adjacency_matrix: torch.Tensor, n: int, l: int) -> t
     indices = supra_adjacency_matrix.indices()
     values = supra_adjacency_matrix.values()
 
-    # Find which indices are in diagonal blocks
+    # Find which indices
     diagonal_mask = is_in_diagonal_block(indices, n)
 
     # Filter indices and values
@@ -620,41 +620,69 @@ def compute_katz_centrality(supra_adjacency_matrix: torch.Tensor, n: int, l: int
     """
     supra_adjacency_matrix = supra_adjacency_matrix.coalesce()
     indexes = supra_adjacency_matrix.indices()
-    binary_values = torch.ones_like(supra_adjacency_matrix.values())
+    # Use binary values for connectivity (same behavior as before) but ensure float dtype for SciPy
+    binary_values = torch.ones_like(supra_adjacency_matrix.values(), dtype=torch.float32)
 
-    supra_adjacency_matrix = sp.sparse.coo_matrix(
-        (binary_values.cpu().numpy(),
-        (indexes[0].cpu().numpy(), indexes[1].cpu().numpy())),
-        shape=(n*l, n*l)
+    # Build sparse COO and convert to CSC for column-oriented operations / factorization
+    coo = sp.sparse.coo_matrix(
+        (binary_values.cpu().numpy().astype(np.float64),
+         (indexes[0].cpu().numpy(), indexes[1].cpu().numpy())),
+        shape=(n * l, n * l)
     )
-    eigen = sp.sparse.linalg.eigs(supra_adjacency_matrix.T)
-    leading_eigenvalue = eigen[0][0].real
-    print("Eigenvalues:", leading_eigenvalue)
+    # Ensure we have a canonical CSC matrix (sorted indices, duplicates summed)
+    supra_csc = coo.tocsc()
+    try:
+        supra_csc.sum_duplicates()
+    except Exception:
+        # older scipy versions may not have sum_duplicates on csc; ignore if not present
+        pass
+    supra_csc.sort_indices()
+    supra_adjacency_matrix = supra_csc
+    print("Converted supra-adjacency matrix to canonical CSC format.")
 
-    # compute the kronecker product of the sparse diagonal matrix of N entries and sparse diagonal matrix of L entries
-    delta = sp.sparse.kron(sp.sparse.eye(n), sp.sparse.eye(l))
+    # Compute leading eigenvalue (use k=1 to request only the largest eigenvalue)
+    try:
+        eigvals = sp.sparse.linalg.eigs(supra_adjacency_matrix.T, k=1, which='LM', return_eigenvectors=False)
+        leading_eigenvalue = eigvals[0].real
+    except Exception:
+        # fallback: request a single eigenvalue without extras (may still fail on tiny matrices)
+        eigvals = sp.sparse.linalg.eigs(supra_adjacency_matrix.T, k=1, return_eigenvectors=False)
+        leading_eigenvalue = eigvals[0].real
+    print("Leading eigenvalue:", leading_eigenvalue)
+
+    # Build delta as canonical CSC and ensure float dtype
+    delta = sp.sparse.kron(sp.sparse.eye(n, format="csc", dtype=np.float64),
+                           sp.sparse.eye(l, format="csc", dtype=np.float64))
     print("Delta shape:", delta.shape)
 
     # This ensures convergence of the Katz kernel tensor
-    a = 0.99999 / abs(leading_eigenvalue)
+    if leading_eigenvalue == 0:
+        a = 0.99999
+    else:
+        a = 0.99999 / abs(leading_eigenvalue)
 
-    # Katzkernel tensor
-    katz_kernel = sp.sparse.linalg.inv(delta - a*supra_adjacency_matrix)
-    print("Katz kernel shape:", katz_kernel.shape)
+    # Form the linear operator (delta - a * supra) and canonicalize to CSC
+    A = delta - a * supra_adjacency_matrix
+    A = A.tocsc()
+    print("Linear system matrix (delta - a*M) is canonical CSC with shape:", A.shape)
 
-    # katz centrality supra vector
-    katz_centrality = katz_kernel @ np.ones(n*l, dtype=np.float32)
-    print("Katz centrality shape:", katz_centrality.shape)
-    # Reshape to (n, l)
-    katz_centrality = katz_centrality.reshape(n, l)
-    print("Katz centrality reshaped:", katz_centrality.shape)
+    # Solve the linear system A x = 1 instead of computing a dense inverse
+    ones = np.ones(n * l, dtype=np.float64)
+    katz_vec = sp.sparse.linalg.spsolve(A, ones)
+    print("Solved linear system for Katz centrality, vector length:", katz_vec.shape)
 
-    # Sum across layers to get the overall versatility
+    # Reshape to (n, l) and aggregate across layers
+    katz_centrality = katz_vec.reshape(n, l)
     katz_centrality = katz_centrality.sum(axis=1)
-    print("Katz centrality summed across layers:", katz_centrality.shape)
 
-    centrality = katz_centrality / max(katz_centrality)
-    return centrality
+    # Normalize and return as torch tensor (float32)
+    maxv = katz_centrality.max()
+    if maxv == 0:
+        centrality = np.zeros_like(katz_centrality, dtype=np.float32)
+    else:
+        centrality = (katz_centrality / maxv).astype(np.float32)
+
+    return torch.from_numpy(centrality)
 
 def compute_multipagerank_centrality(supra_adjacency_matrix: torch.Tensor, n: int, l: int, alpha: float = 0.85) -> torch.Tensor:
     """
@@ -791,17 +819,41 @@ def compute_average_global_clustering(supra_adjacency_matrix: torch.Tensor, n: i
     numerator = numerator_step_2.diagonal().sum()
     print("Numerator step 3 done... in ", time() - start, " seconds")
     # Compute the F matrix: Ones() - Eye()
-    start = time()
-    ones_matrix = np.ones((n*l, n*l), dtype=np.float32)
-    eye_matrix = sp.sparse.eye(n*l, format="csr", dtype=np.float32)
-    f_matrix = ones_matrix - eye_matrix
-    print("Numerator done... in", time() - num_start, " seconds with last step that took ", time() - start, " seconds")
+    print("Numerator done... in", time() - num_start, " seconds")
 
-    # Compute the denominator: tr(A * F * A)
-    print("Computing denominator...")
+    print("Computing denominator (memory-efficient)...")
     den_start = time()
-    denominator = (supra_adjacency_matrix @ f_matrix @ supra_adjacency_matrix).diagonal().sum()
-    print("Denominator done... in ", time() - den_start, " seconds")
+
+    N = n * l
+    ones_vec = np.ones(N, dtype=np.float32)
+    print(f"Ones vector created with shape: {ones_vec.shape}")
+
+    # Ensure A is CSR for efficient matvec and elementwise ops
+    A = supra_adjacency_matrix.tocsr()
+
+    # u = A * 1, v = A^T * 1
+    u = A.dot(ones_vec)
+    v = A.T.dot(ones_vec)
+
+    # tr(A J A) = v^T u
+    tr_AJA = float(v.dot(u))
+
+    # tr(A^2) = sum of elementwise product A * A.T
+    tr_A2 = float((A.multiply(A.T)).sum())
+
+    """
+    F = J - I, with J = 1 1^T
+
+    den = tr(AFA) = tr(AJA) - tr(AIA) = tr(AJA) - tr(A^2)
+    tr(AJA) = 1^T (A^T A) 1 = (A^T 1)^T (A 1) = v^T u
+    tr(AIA) = tr(A^2) = sum(A * A^T)
+
+    den = v^T u - sum(A * A^T)
+    """
+
+    denominator = tr_AJA - tr_A2
+    print("Denominator done... in", time() - den_start, "seconds")
+    print(f"Denominator components: tr(AJA)={tr_AJA}, tr(A^2)={tr_A2}")
 
     return numerator / (max(supra_adjacency_matrix.data) * denominator) if denominator != 0 else 0.0
 
@@ -886,7 +938,6 @@ if __name__ == "__main__":
         size=(matrix_size, matrix_size),
         dtype=torch.float32
     ).coalesce()
-
 
     # Test single metric
     nodes_katz_centrality = compute_katz_centrality(sparse_matrix, n, l)
